@@ -13,6 +13,8 @@ from task_nerd.widgets.task_list import (
     StatusBarUpdate,
     TaskCreated,
     TaskDeleted,
+    TaskList,
+    TaskListItem,
     TaskStatusToggled,
 )
 
@@ -133,9 +135,25 @@ class TaskNerdApp(App):
     def on_task_created(self, event: TaskCreated) -> None:
         """Handle task creation from the task list widget."""
         if self.database:
-            title, category = parse_task_title(event.title)
-            self.database.create_task(title, category)
+            title, explicit_category = parse_task_title(event.title)
+            # Use explicit category if provided (user typed #tag), otherwise inherit
+            category = explicit_category if explicit_category is not None else event.default_category
+            new_task = self.database.create_task_at_position(
+                title, category, event.after_task_id
+            )
             self._load_tasks()
+
+            # Select the newly created task
+            def select_new_task() -> None:
+                task_list_view = self.query_one(TaskListView)
+                task_list = task_list_view.query_one("#task-list", TaskList)
+                for idx, child in enumerate(task_list.children):
+                    if isinstance(child, TaskListItem) and child._task_data.id == new_task.id:
+                        task_list.index = idx
+                        break
+                task_list.focus()
+
+            self.call_after_refresh(select_new_task)
 
     def on_task_status_toggled(self, event: TaskStatusToggled) -> None:
         """Handle task status toggle from the task list widget."""

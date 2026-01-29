@@ -12,8 +12,15 @@ from task_nerd.models import Task, TaskStatus
 class TaskCreated(Message):
     """Message sent when a new task is created."""
 
-    def __init__(self, title: str) -> None:
+    def __init__(
+        self,
+        title: str,
+        default_category: str | None = None,
+        after_task_id: int | None = None,
+    ) -> None:
         self.title = title
+        self.default_category = default_category
+        self.after_task_id = after_task_id
         super().__init__()
 
 
@@ -81,18 +88,28 @@ class TaskListItem(ListItem):
         return indicators.get(status, "[ ]")
 
 
-class NewTaskRow(Horizontal):
+class NewTaskRow(ListItem):
     """An inline input row for creating a new task."""
 
     DEFAULT_CSS = """
     NewTaskRow {
-        height: auto;
-        width: 100%;
+        height: 1;
         padding: 0 1;
+    }
+
+    NewTaskRow Horizontal {
+        height: 1;
+        width: 100%;
     }
 
     NewTaskRow .status-prefix {
         width: 4;
+        height: 1;
+    }
+
+    NewTaskRow .indent-prefix {
+        width: 2;
+        height: 1;
     }
 
     NewTaskRow Input {
@@ -108,11 +125,29 @@ class NewTaskRow(Horizontal):
     }
     """
 
+    def __init__(
+        self,
+        default_category: str | None = None,
+        after_task_id: int | None = None,
+        indented: bool = False,
+    ) -> None:
+        super().__init__()
+        self.default_category = default_category
+        self.after_task_id = after_task_id
+        self._indented = indented
+
     def compose(self) -> ComposeResult:
-        yield Static("[ ] ", classes="status-prefix")
-        yield Input(id="new-task-input")
+        with Horizontal():
+            if self._indented:
+                yield Static("  ", classes="indent-prefix")
+            yield Static("[ ] ", classes="status-prefix")
+            yield Input(id="new-task-input")
 
     def on_mount(self) -> None:
+        # Use call_later to ensure the widget tree is fully ready before focusing
+        self.call_later(self._focus_input)
+
+    def _focus_input(self) -> None:
         self.query_one(Input).focus()
 
 
@@ -162,6 +197,11 @@ class TaskList(ListView):
     TaskList > CategoryHeader Static {
         text-style: bold;
     }
+
+    TaskList > NewTaskRow {
+        height: 1;
+        padding: 0 1;
+    }
     """
 
     def action_toggle_status(self) -> None:
@@ -190,6 +230,12 @@ class TaskList(ListView):
         if self._delete_pending:
             self._delete_pending = False
             self.post_message(StatusBarUpdate(""))
+
+    def get_selected_task(self) -> Task | None:
+        """Return the currently highlighted task, or None if no task is selected."""
+        if self.highlighted_child and isinstance(self.highlighted_child, TaskListItem):
+            return self.highlighted_child._task_data
+        return None
 
 
 class TaskListView(Vertical):
@@ -258,7 +304,7 @@ class TaskListView(Vertical):
                 task_list.append(TaskListItem(task, indented=indented))
 
     def show_input(self) -> None:
-        """Show an inline input row at the top of the list."""
+        """Show an inline input row after the selected task."""
         if self._editing:
             return
         self._editing = True
@@ -270,8 +316,35 @@ class TaskListView(Vertical):
         except Exception:
             pass
 
-        input_container = self.query_one("#input-container", Vertical)
-        input_container.mount(NewTaskRow())
+        task_list = self.query_one("#task-list", TaskList)
+        selected_task = task_list.get_selected_task()
+
+        # Determine category and position context
+        default_category: str | None = None
+        after_task_id: int | None = None
+        indented = False
+
+        if selected_task is not None:
+            default_category = selected_task.category
+            after_task_id = selected_task.id
+            indented = selected_task.category is not None
+
+        new_row = NewTaskRow(
+            default_category=default_category,
+            after_task_id=after_task_id,
+            indented=indented,
+        )
+
+        # Mount the input row
+        if task_list.highlighted_child is not None:
+            task_list.mount(new_row, after=task_list.highlighted_child)
+        else:
+            # No selection - append at end of list or use input container if empty
+            if task_list.children:
+                task_list.mount(new_row)
+            else:
+                input_container = self.query_one("#input-container", Vertical)
+                input_container.mount(new_row)
 
     def hide_input(self) -> None:
         """Remove the inline input row."""
@@ -279,6 +352,7 @@ class TaskListView(Vertical):
             return
         self._editing = False
         try:
+            # Query from entire TaskListView since NewTaskRow could be in TaskList or input-container
             new_task_row = self.query_one(NewTaskRow)
             new_task_row.remove()
         except Exception:
@@ -292,7 +366,22 @@ class TaskListView(Vertical):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
         if event.input.id == "new-task-input" and event.value.strip():
-            self.post_message(TaskCreated(event.value.strip()))
+            # Get context from the NewTaskRow
+            try:
+                new_task_row = self.query_one(NewTaskRow)
+                default_category = new_task_row.default_category
+                after_task_id = new_task_row.after_task_id
+            except Exception:
+                default_category = None
+                after_task_id = None
+
+            self.post_message(
+                TaskCreated(
+                    event.value.strip(),
+                    default_category=default_category,
+                    after_task_id=after_task_id,
+                )
+            )
             self._editing = False
             # Remove the input row
             try:

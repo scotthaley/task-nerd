@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Generator
 if TYPE_CHECKING:
     from task_nerd.models import Task, TaskStatus
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class Database:
@@ -42,6 +42,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'pending',
                     priority INTEGER DEFAULT 0,
                     category TEXT DEFAULT NULL,
+                    order_value INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
                 )
@@ -109,39 +110,85 @@ class Database:
                     "INSERT INTO schema_version (version) VALUES (?)", (2,)
                 )
                 conn.commit()
+                current_version = 2
+
+            # Migration v2 -> v3: Add order_value column
+            if current_version < 3:
+                cursor.execute(
+                    "ALTER TABLE tasks ADD COLUMN order_value INTEGER DEFAULT 0"
+                )
+                # Populate existing tasks with order values per category
+                # Each category starts fresh at 1000, 2000, 3000...
+                cursor.execute("SELECT DISTINCT category FROM tasks")
+                categories = [row["category"] for row in cursor.fetchall()]
+
+                for cat in categories:
+                    if cat is None:
+                        cursor.execute(
+                            "SELECT id FROM tasks WHERE category IS NULL ORDER BY created_at DESC"
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT id FROM tasks WHERE category = ? ORDER BY created_at DESC",
+                            (cat,),
+                        )
+                    rows = cursor.fetchall()
+                    for idx, row in enumerate(rows):
+                        cursor.execute(
+                            "UPDATE tasks SET order_value = ? WHERE id = ?",
+                            ((idx + 1) * 1000, row["id"]),
+                        )
+
+                cursor.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)", (3,)
+                )
+                conn.commit()
 
     def get_all_tasks(self) -> list["Task"]:
-        """Fetch all tasks ordered by category then created_at.
+        """Fetch all tasks ordered by category, then by order_value within each category.
 
         Uncategorized tasks appear first, then tasks grouped by category
-        alphabetically, with each group sorted by created_at descending.
+        alphabetically, with each group sorted by order_value ascending.
         """
         from task_nerd.models import Task
 
         with self.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, title, description, status, priority, category, created_at, updated_at
+                SELECT id, title, description, status, priority, category, order_value, created_at, updated_at
                 FROM tasks
                 ORDER BY
                     CASE WHEN category IS NULL THEN 0 ELSE 1 END,
                     category ASC,
-                    created_at DESC
+                    order_value ASC
             """)
             return [Task.from_row(dict(row)) for row in cursor.fetchall()]
 
     def create_task(self, title: str, category: str | None = None) -> "Task":
-        """Create a new task with given title and optional category."""
+        """Create a new task with given title and optional category.
+
+        Note: This method appends the task at the end. Use create_task_at_position
+        for positioned insertion.
+        """
         from task_nerd.models import Task
 
         with self.connection() as conn:
             cursor = conn.cursor()
+            # Get the next order_value (max + 1000)
+            cursor.execute("SELECT MAX(order_value) as max_order FROM tasks")
+            row = cursor.fetchone()
+            max_order = row["max_order"] if row["max_order"] is not None else 0
+            order_value = max_order + 1000
+
             cursor.execute(
-                "INSERT INTO tasks (title, category) VALUES (?, ?)",
-                (title, category),
+                "INSERT INTO tasks (title, category, order_value) VALUES (?, ?, ?)",
+                (title, category, order_value),
             )
             conn.commit()
-            cursor.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,))
+            cursor.execute(
+                "SELECT id, title, description, status, priority, category, order_value, created_at, updated_at FROM tasks WHERE id = ?",
+                (cursor.lastrowid,),
+            )
             return Task.from_row(dict(cursor.fetchone()))
 
     def update_task_status(self, task_id: int, status: "TaskStatus") -> None:
@@ -162,3 +209,152 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
             conn.commit()
+
+    def create_task_at_position(
+        self, title: str, category: str | None = None, after_task_id: int | None = None
+    ) -> "Task":
+        """Create a new task positioned after the specified task within its category.
+
+        Args:
+            title: The task title
+            category: Optional category for the task
+            after_task_id: ID of task to insert after, or None to append at end of category
+
+        Returns:
+            The created Task
+        """
+        from task_nerd.models import Task
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            order_value = self._get_next_order_value(cursor, after_task_id, category)
+
+            cursor.execute(
+                "INSERT INTO tasks (title, category, order_value) VALUES (?, ?, ?)",
+                (title, category, order_value),
+            )
+            conn.commit()
+            cursor.execute(
+                "SELECT id, title, description, status, priority, category, order_value, created_at, updated_at FROM tasks WHERE id = ?",
+                (cursor.lastrowid,),
+            )
+            return Task.from_row(dict(cursor.fetchone()))
+
+    def _get_next_order_value(
+        self, cursor: "sqlite3.Cursor", after_task_id: int | None, category: str | None
+    ) -> int:
+        """Calculate the order_value for insertion after the given task within a category.
+
+        Args:
+            cursor: Database cursor to use
+            after_task_id: ID of task to insert after, or None for end of category
+            category: The category the new task will belong to
+
+        Returns:
+            The order_value to use for the new task
+        """
+        # Build category filter for queries
+        if category is None:
+            category_filter = "category IS NULL"
+            category_params: tuple = ()
+        else:
+            category_filter = "category = ?"
+            category_params = (category,)
+
+        if after_task_id is None:
+            # Append at end of category: use max + 1000
+            cursor.execute(
+                f"SELECT MAX(order_value) as max_order FROM tasks WHERE {category_filter}",
+                category_params,
+            )
+            row = cursor.fetchone()
+            max_order = row["max_order"] if row["max_order"] is not None else 0
+            return max_order + 1000
+
+        # Get the order_value of the task we're inserting after
+        cursor.execute(
+            "SELECT order_value, category FROM tasks WHERE id = ?", (after_task_id,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            # Task not found, append at end of category
+            cursor.execute(
+                f"SELECT MAX(order_value) as max_order FROM tasks WHERE {category_filter}",
+                category_params,
+            )
+            row = cursor.fetchone()
+            max_order = row["max_order"] if row["max_order"] is not None else 0
+            return max_order + 1000
+
+        after_order = row["order_value"]
+        after_category = row["category"]
+
+        # If inserting into a different category than the after_task, append at end of new category
+        if after_category != category:
+            cursor.execute(
+                f"SELECT MAX(order_value) as max_order FROM tasks WHERE {category_filter}",
+                category_params,
+            )
+            row = cursor.fetchone()
+            max_order = row["max_order"] if row["max_order"] is not None else 0
+            return max_order + 1000
+
+        # Find the next task's order_value within the same category
+        cursor.execute(
+            f"SELECT order_value FROM tasks WHERE {category_filter} AND order_value > ? ORDER BY order_value ASC LIMIT 1",
+            category_params + (after_order,),
+        )
+        next_row = cursor.fetchone()
+
+        if next_row is None:
+            # No task after in this category, use after_order + 1000
+            return after_order + 1000
+
+        next_order = next_row["order_value"]
+        gap = next_order - after_order
+
+        if gap > 1:
+            # Use midpoint
+            return (after_order + next_order) // 2
+
+        # Gap exhausted - rebalance tasks in this category
+        self._rebalance_order_values(cursor, category)
+
+        # Re-fetch the after_order since it may have changed
+        cursor.execute(
+            "SELECT order_value FROM tasks WHERE id = ?", (after_task_id,)
+        )
+        row = cursor.fetchone()
+        after_order = row["order_value"]
+
+        # Find the next task's order_value again
+        cursor.execute(
+            f"SELECT order_value FROM tasks WHERE {category_filter} AND order_value > ? ORDER BY order_value ASC LIMIT 1",
+            category_params + (after_order,),
+        )
+        next_row = cursor.fetchone()
+
+        if next_row is None:
+            return after_order + 1000
+
+        return (after_order + next_row["order_value"]) // 2
+
+    def _rebalance_order_values(
+        self, cursor: "sqlite3.Cursor", category: str | None
+    ) -> None:
+        """Rebalance tasks within a category with fresh order values spaced by 1000."""
+        if category is None:
+            cursor.execute(
+                "SELECT id FROM tasks WHERE category IS NULL ORDER BY order_value ASC"
+            )
+        else:
+            cursor.execute(
+                "SELECT id FROM tasks WHERE category = ? ORDER BY order_value ASC",
+                (category,),
+            )
+        rows = cursor.fetchall()
+        for idx, row in enumerate(rows):
+            cursor.execute(
+                "UPDATE tasks SET order_value = ? WHERE id = ?",
+                ((idx + 1) * 1000, row["id"]),
+            )
