@@ -155,3 +155,10 @@ class Database:
                 (status.value, task_id)
             )
             conn.commit()
+
+    def delete_task(self, task_id: int) -> None:
+        """Delete a task by ID."""
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            conn.commit()

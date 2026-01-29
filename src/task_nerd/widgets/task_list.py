@@ -26,6 +26,22 @@ class TaskStatusToggled(Message):
         super().__init__()
 
 
+class TaskDeleted(Message):
+    """Message sent when a task is deleted."""
+
+    def __init__(self, task_id: int) -> None:
+        self.task_id = task_id
+        super().__init__()
+
+
+class StatusBarUpdate(Message):
+    """Message sent to update the status bar text."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        super().__init__()
+
+
 class CategoryHeader(ListItem):
     """A non-selectable header row for a category group."""
 
@@ -107,7 +123,13 @@ class TaskList(ListView):
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("space", "toggle_status", "Toggle done", show=True),
+        Binding("d", "delete_press", "Delete", show=True),
+        Binding("escape", "cancel_delete", "Cancel", show=False),
     ]
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._delete_pending: bool = False
 
     DEFAULT_CSS = """
     TaskList {
@@ -148,6 +170,26 @@ class TaskList(ListView):
             task = self.highlighted_child._task_data
             new_status = TaskStatus.PENDING if task.status == TaskStatus.COMPLETED else TaskStatus.COMPLETED
             self.post_message(TaskStatusToggled(task.id, new_status))
+
+    def action_delete_press(self) -> None:
+        """Handle 'd' key press for vim-style delete."""
+        if not self.highlighted_child or not isinstance(self.highlighted_child, TaskListItem):
+            return
+
+        if not self._delete_pending:
+            self._delete_pending = True
+            self.post_message(StatusBarUpdate("Press d again to delete, Escape to cancel"))
+        else:
+            task = self.highlighted_child._task_data
+            self._delete_pending = False
+            self.post_message(StatusBarUpdate(""))
+            self.post_message(TaskDeleted(task.id))
+
+    def action_cancel_delete(self) -> None:
+        """Cancel pending delete operation."""
+        if self._delete_pending:
+            self._delete_pending = False
+            self.post_message(StatusBarUpdate(""))
 
 
 class TaskListView(Vertical):

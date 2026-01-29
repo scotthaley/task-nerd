@@ -3,13 +3,18 @@
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header
+from textual.widgets import Footer, Header, Static
 
 from task_nerd.database import Database
 from task_nerd.screens import CreateDatabaseDialog
 from task_nerd.utils import parse_task_title
 from task_nerd.widgets import TaskListView
-from task_nerd.widgets.task_list import TaskCreated, TaskStatusToggled
+from task_nerd.widgets.task_list import (
+    StatusBarUpdate,
+    TaskCreated,
+    TaskDeleted,
+    TaskStatusToggled,
+)
 
 
 class TaskNerdApp(App):
@@ -18,7 +23,7 @@ class TaskNerdApp(App):
     BINDINGS = [
         ("a", "add_task", "Add task"),
         ("escape", "cancel_input", "Cancel"),
-        ("d", "toggle_dark", "Toggle dark mode"),
+        ("D", "toggle_dark", "Toggle dark mode"),
         ("q", "quit", "Quit"),
     ]
 
@@ -28,10 +33,25 @@ class TaskNerdApp(App):
         self.db_path = Path.cwd() / "tasks.db"
         self.database: Database | None = None
 
+    CSS = """
+    #status-bar {
+        height: 1;
+        width: 100%;
+        background: $surface;
+        color: $warning;
+        padding: 0 1;
+    }
+
+    #status-bar.hidden {
+        display: none;
+    }
+    """
+
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield Header()
         yield TaskListView()
+        yield Static("", id="status-bar", classes="hidden")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -131,6 +151,33 @@ class TaskNerdApp(App):
                 task_list.focus()
 
             self.call_after_refresh(restore_selection)
+
+    def on_task_deleted(self, event: TaskDeleted) -> None:
+        """Handle task deletion from the task list widget."""
+        if self.database:
+            task_list_view = self.query_one(TaskListView)
+            task_list = task_list_view.query_one("#task-list")
+            current_index = task_list.index
+            self.database.delete_task(event.task_id)
+            self._load_tasks()
+
+            def restore_selection() -> None:
+                # Adjust index if we deleted the last item
+                max_index = len(task_list.children) - 1
+                task_list.index = min(current_index, max_index)
+                task_list.focus()
+
+            self.call_after_refresh(restore_selection)
+
+    def on_status_bar_update(self, event: StatusBarUpdate) -> None:
+        """Handle status bar updates from widgets."""
+        status_bar = self.query_one("#status-bar", Static)
+        if event.text:
+            status_bar.update(event.text)
+            status_bar.remove_class("hidden")
+        else:
+            status_bar.update("")
+            status_bar.add_class("hidden")
 
     def action_toggle_dark(self) -> None:
         """Toggle dark mode."""
