@@ -26,18 +26,34 @@ class TaskStatusToggled(Message):
         super().__init__()
 
 
+class CategoryHeader(ListItem):
+    """A non-selectable header row for a category group."""
+
+    def __init__(self, category_name: str) -> None:
+        self._category_name = category_name
+        super().__init__()
+        self.disabled = True
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"# {self._category_name}")
+
+
 class TaskListItem(ListItem):
     """A single task row display as a ListItem."""
 
-    def __init__(self, task: Task) -> None:
+    def __init__(self, task: Task, indented: bool = False) -> None:
         self._task_data = task
+        self._indented = indented
         super().__init__()
         if task.status == TaskStatus.COMPLETED:
             self.add_class("-completed")
+        if indented:
+            self.add_class("-indented")
 
     def compose(self) -> ComposeResult:
         status_indicator = self._get_status_indicator(self._task_data.status)
-        yield Static(f"{status_indicator} {self._task_data.title}")
+        prefix = "  " if self._indented else ""
+        yield Static(f"{prefix}{status_indicator} {self._task_data.title}")
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
         indicators = {
@@ -115,6 +131,15 @@ class TaskList(ListView):
         text-style: strike;
         color: $text-muted;
     }
+
+    TaskList > CategoryHeader {
+        height: auto;
+        padding: 1 1 0 1;
+    }
+
+    TaskList > CategoryHeader Static {
+        text-style: bold;
+    }
     """
 
     def action_toggle_status(self) -> None:
@@ -178,8 +203,17 @@ class TaskListView(Vertical):
             except Exception:
                 pass
 
+            current_category: str | None = None
             for task in self._tasks:
-                task_list.append(TaskListItem(task))
+                # Insert category header when category changes
+                if task.category != current_category:
+                    current_category = task.category
+                    if current_category is not None:
+                        task_list.append(CategoryHeader(current_category))
+
+                # Tasks with a category are indented
+                indented = task.category is not None
+                task_list.append(TaskListItem(task, indented=indented))
 
     def show_input(self) -> None:
         """Show an inline input row at the top of the list."""
@@ -218,4 +252,9 @@ class TaskListView(Vertical):
         if event.input.id == "new-task-input" and event.value.strip():
             self.post_message(TaskCreated(event.value.strip()))
             self._editing = False
-            # Row will be replaced when list refreshes
+            # Remove the input row
+            try:
+                new_task_row = self.query_one(NewTaskRow)
+                new_task_row.remove()
+            except Exception:
+                pass

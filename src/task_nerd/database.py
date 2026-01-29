@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Generator
 if TYPE_CHECKING:
     from task_nerd.models import Task, TaskStatus
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 class Database:
@@ -41,6 +41,7 @@ class Database:
                     description TEXT DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending',
                     priority INTEGER DEFAULT 0,
+                    category TEXT DEFAULT NULL,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
                 )
@@ -90,25 +91,55 @@ class Database:
         except sqlite3.Error:
             return False
 
+    def migrate_schema(self) -> None:
+        """Run any pending schema migrations."""
+        current_version = self.get_schema_version()
+        if current_version is None:
+            return
+
+        with self.connection() as conn:
+            cursor = conn.cursor()
+
+            # Migration v1 -> v2: Add category column
+            if current_version < 2:
+                cursor.execute(
+                    "ALTER TABLE tasks ADD COLUMN category TEXT DEFAULT NULL"
+                )
+                cursor.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)", (2,)
+                )
+                conn.commit()
+
     def get_all_tasks(self) -> list["Task"]:
-        """Fetch all tasks ordered by created_at descending."""
+        """Fetch all tasks ordered by category then created_at.
+
+        Uncategorized tasks appear first, then tasks grouped by category
+        alphabetically, with each group sorted by created_at descending.
+        """
         from task_nerd.models import Task
 
         with self.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, title, description, status, priority, created_at, updated_at
-                FROM tasks ORDER BY created_at DESC
+                SELECT id, title, description, status, priority, category, created_at, updated_at
+                FROM tasks
+                ORDER BY
+                    CASE WHEN category IS NULL THEN 0 ELSE 1 END,
+                    category ASC,
+                    created_at DESC
             """)
             return [Task.from_row(dict(row)) for row in cursor.fetchall()]
 
-    def create_task(self, title: str) -> "Task":
-        """Create a new task with given title."""
+    def create_task(self, title: str, category: str | None = None) -> "Task":
+        """Create a new task with given title and optional category."""
         from task_nerd.models import Task
 
         with self.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO tasks (title) VALUES (?)", (title,))
+            cursor.execute(
+                "INSERT INTO tasks (title, category) VALUES (?, ?)",
+                (title, category),
+            )
             conn.commit()
             cursor.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,))
             return Task.from_row(dict(cursor.fetchone()))

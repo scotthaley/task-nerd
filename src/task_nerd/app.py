@@ -7,6 +7,7 @@ from textual.widgets import Footer, Header
 
 from task_nerd.database import Database
 from task_nerd.screens import CreateDatabaseDialog
+from task_nerd.utils import parse_task_title
 from task_nerd.widgets import TaskListView
 from task_nerd.widgets.task_list import TaskCreated, TaskStatusToggled
 
@@ -79,6 +80,9 @@ class TaskNerdApp(App):
             if version is None:
                 # Old database without version table - initialize schema
                 self.database.initialize_schema()
+            else:
+                # Run any pending migrations
+                self.database.migrate_schema()
             self._load_tasks()
         except PermissionError:
             self.notify(
@@ -109,7 +113,8 @@ class TaskNerdApp(App):
     def on_task_created(self, event: TaskCreated) -> None:
         """Handle task creation from the task list widget."""
         if self.database:
-            self.database.create_task(event.title)
+            title, category = parse_task_title(event.title)
+            self.database.create_task(title, category)
             self._load_tasks()
 
     def on_task_status_toggled(self, event: TaskStatusToggled) -> None:

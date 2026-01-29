@@ -24,6 +24,7 @@ class Task:
     description: str
     status: TaskStatus
     priority: int
+    category: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -36,6 +37,7 @@ class Task:
             description=row["description"],
             status=TaskStatus(row["status"]),
             priority=row["priority"],
+            category=row["category"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
