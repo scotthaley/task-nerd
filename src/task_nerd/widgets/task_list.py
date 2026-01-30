@@ -70,6 +70,23 @@ class TaskEdited(Message):
         super().__init__()
 
 
+class TaskPasted(Message):
+    """Message sent when a task is pasted."""
+
+    def __init__(
+        self,
+        title: str,
+        category: str | None,
+        after_task_id: int | None,
+        delete_source_id: int | None = None,
+    ) -> None:
+        self.title = title
+        self.category = category  # From destination, not source
+        self.after_task_id = after_task_id
+        self.delete_source_id = delete_source_id  # For cut operation
+        super().__init__()
+
+
 class InputCancelled(Message):
     """Message sent when input is cancelled via Escape."""
 
@@ -176,11 +193,20 @@ class TaskRow(Static):
     TaskRow {
         height: auto;
         padding: 0 1;
+        border-left: none;
     }
 
     TaskRow.-completed {
         text-style: strike;
         color: $text-muted;
+    }
+
+    TaskRow.-copied {
+        border-left: wide $success;
+    }
+
+    TaskRow.-cut {
+        border-left: wide $warning;
     }
     """
 
@@ -368,11 +394,15 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("space", "toggle_status", "Toggle done", show=True),
+        Binding("a", "edit_append", "Edit", show=False),
         Binding("i", "edit_append", "Edit", show=True),
         Binding("I", "edit_insert", "Edit (start)", show=False),
         Binding("s", "edit_substitute", "Replace", show=False),
         Binding("d", "delete_press", "Delete", show=True),
         Binding("escape", "cancel_delete", "Cancel", show=False),
+        Binding("y", "copy_task", "Copy", show=False),
+        Binding("x", "cut_task", "Cut", show=False),
+        Binding("p", "paste_task", "Paste", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -397,6 +427,9 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
         super().__init__(*args, **kwargs)
         self._task_ids: list[int] = []
         self._delete_pending: bool = False
+        self._clipboard_task: Task | None = None
+        self._clipboard_mode: str | None = None  # "copy" or "cut"
+        self._clipboard_ready: bool = False  # Prevent clipboard ops until user interaction
 
     def watch_selected_task_id(self, old_id: int | None, new_id: int | None) -> None:
         """Update CSS classes when selection changes."""
@@ -436,6 +469,7 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
 
     def action_cursor_down(self) -> None:
         """Move selection to next task."""
+        self._clipboard_ready = True  # User has interacted
         if not self._task_ids:
             return
         if self.selected_task_id is None:
@@ -450,6 +484,7 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
 
     def action_cursor_up(self) -> None:
         """Move selection to previous task."""
+        self._clipboard_ready = True  # User has interacted
         if not self._task_ids:
             return
         if self.selected_task_id is None:
@@ -464,6 +499,7 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
 
     def action_toggle_status(self) -> None:
         """Toggle the selected task between done and not done."""
+        self._clipboard_ready = True  # User has interacted
         task = self.get_selected_task()
         if task is not None:
             new_status = (
@@ -475,6 +511,7 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
 
     def action_delete_press(self) -> None:
         """Handle 'd' key press for vim-style delete."""
+        self._clipboard_ready = True  # User has interacted
         if self.selected_task_id is None:
             return
 
@@ -489,9 +526,14 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
             self.post_message(TaskDeleted(self.selected_task_id))
 
     def action_cancel_delete(self) -> None:
-        """Cancel pending delete operation or notify app of escape press."""
+        """Cancel pending delete, clear clipboard, or notify app of escape press."""
         if self._delete_pending:
             self._delete_pending = False
+            self.post_message(StatusBarUpdate(""))
+        elif self._clipboard_task is not None:
+            self._clipboard_task = None
+            self._clipboard_mode = None
+            self._clear_clipboard_styling()
             self.post_message(StatusBarUpdate(""))
         else:
             # Nothing to cancel locally, let the app handle it
@@ -499,14 +541,17 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
 
     def action_edit_append(self) -> None:
         """Edit task with cursor at end (append mode)."""
+        self._clipboard_ready = True  # User has interacted
         self._start_edit(EditMode.APPEND)
 
     def action_edit_insert(self) -> None:
         """Edit task with cursor at beginning (insert mode)."""
+        self._clipboard_ready = True  # User has interacted
         self._start_edit(EditMode.INSERT)
 
     def action_edit_substitute(self) -> None:
         """Edit task with text cleared (substitute mode)."""
+        self._clipboard_ready = True  # User has interacted
         self._start_edit(EditMode.SUBSTITUTE)
 
     def _start_edit(self, mode: EditMode) -> None:
@@ -517,6 +562,96 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
         task_list_view = self.parent
         if isinstance(task_list_view, TaskListView):
             task_list_view.start_edit(task_row, mode)
+
+    def _clear_clipboard_styling(self) -> None:
+        """Remove clipboard styling from all task rows."""
+        for row in self.query(TaskRow):
+            row.remove_class("-copied")
+            row.remove_class("-cut")
+
+    def action_copy_task(self) -> None:
+        """Copy the selected task to clipboard."""
+        if not self._clipboard_ready:
+            return
+        task = self.get_selected_task()
+        if task is None:
+            return
+
+        self._clipboard_task = task
+        self._clipboard_mode = "copy"
+
+        self._clear_clipboard_styling()
+        task_row = self.get_selected_task_row()
+        if task_row:
+            task_row.add_class("-copied")
+
+        self.post_message(StatusBarUpdate("Task copied"))
+
+    def action_cut_task(self) -> None:
+        """Cut the selected task to clipboard."""
+        if not self._clipboard_ready:
+            return
+        task = self.get_selected_task()
+        if task is None:
+            return
+
+        self._clipboard_task = task
+        self._clipboard_mode = "cut"
+
+        self._clear_clipboard_styling()
+        task_row = self.get_selected_task_row()
+        if task_row:
+            task_row.add_class("-cut")
+
+        self.post_message(StatusBarUpdate("Task cut"))
+
+    def action_paste_task(self) -> None:
+        """Paste the clipboard task after the selected task."""
+        if not self._clipboard_ready:
+            return
+        if self._clipboard_task is None:
+            return
+
+        selected_task = self.get_selected_task()
+        after_task_id = selected_task.id if selected_task else None
+        category = selected_task.category if selected_task else None
+
+        delete_source_id = (
+            self._clipboard_task.id if self._clipboard_mode == "cut" else None
+        )
+
+        self.post_message(
+            TaskPasted(
+                title=self._clipboard_task.title,
+                category=category,
+                after_task_id=after_task_id,
+                delete_source_id=delete_source_id,
+            )
+        )
+
+        if self._clipboard_mode == "cut":
+            self._clipboard_task = None
+            self._clipboard_mode = None
+            self._clear_clipboard_styling()
+
+    def clear_clipboard_if_deleted(self, task_id: int) -> None:
+        """Clear clipboard if the source task was deleted."""
+        if self._clipboard_task and self._clipboard_task.id == task_id:
+            self._clipboard_task = None
+            self._clipboard_mode = None
+
+    def apply_clipboard_styling(self) -> None:
+        """Re-apply clipboard styling to the correct row after refresh."""
+        if self._clipboard_task is None:
+            return
+        try:
+            row = self.query_one(f"TaskRow#task-{self._clipboard_task.id}", TaskRow)
+            if self._clipboard_mode == "copy":
+                row.add_class("-copied")
+            elif self._clipboard_mode == "cut":
+                row.add_class("-cut")
+        except Exception:
+            pass
 
 
 class TaskListView(Vertical):
@@ -630,6 +765,9 @@ class TaskListView(Vertical):
                 tl.selected_task_id = tl._task_ids[0]
             else:
                 tl.selected_task_id = None
+
+            # Re-apply clipboard styling after refresh
+            tl.apply_clipboard_styling()
 
             if should_focus:
                 tl.focus()

@@ -25,6 +25,7 @@ from task_nerd.widgets.task_list import (
     TaskCreated,
     TaskDeleted,
     TaskEdited,
+    TaskPasted,
     TaskStatusToggled,
 )
 
@@ -37,7 +38,7 @@ class TaskNerdApp(App):
     search_term: reactive[str] = reactive("")
 
     BINDINGS = [
-        ("a", "add_task", "Add task"),
+        ("o", "add_task", "Add task"),
         ("/", "start_search", "Search"),
         ("escape", "cancel_input", "Cancel"),
         Binding("f1", "hide_completed_tasks", "Hide done"),
@@ -379,6 +380,9 @@ class TaskNerdApp(App):
             task_list_view = self.query_one(TaskListView)
             task_list = task_list_view.query_one("#task-list", SimpleTaskList)
 
+            # Clear clipboard if deleted task was the clipboard source
+            task_list.clear_clipboard_if_deleted(event.task_id)
+
             # Find the next task to select after deletion
             next_task_id: int | None = None
             try:
@@ -392,6 +396,24 @@ class TaskNerdApp(App):
 
             self.database.delete_task(event.task_id)
             self._load_tasks(select_task_id=next_task_id)
+
+    def on_task_pasted(self, event: TaskPasted) -> None:
+        """Handle task paste from the task list widget."""
+        if self.database:
+            task_list_view = self.query_one(TaskListView)
+            task_list = task_list_view.query_one("#task-list", SimpleTaskList)
+
+            # Create the new task at the destination position
+            new_task = self.database.create_task_at_position(
+                event.title, event.category, event.after_task_id
+            )
+
+            # If this was a cut operation, delete the source task
+            if event.delete_source_id is not None:
+                task_list.clear_clipboard_if_deleted(event.delete_source_id)
+                self.database.delete_task(event.delete_source_id)
+
+            self._load_tasks(select_task_id=new_task.id)
 
     def on_task_edited(self, event: TaskEdited) -> None:
         """Handle task title edit from the task list widget."""

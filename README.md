@@ -7,8 +7,8 @@ A fast, keyboard-driven task management TUI (Terminal User Interface) built with
 ## Features
 
 - **Vim-style navigation** - Use `j`/`k` to move between tasks
-- **Quick task entry** - Press `a` to add a task inline
-- **Inline editing** - Edit tasks with `i`, `I`, or `s` (vim-style)
+- **Quick task entry** - Press `o` to add a task inline
+- **Inline editing** - Edit tasks with `a`, `i`, `I`, or `s` (vim-style)
 - **Categories** - Organize tasks with `#category` syntax (e.g., `fix login bug #auth`)
 - **Fuzzy search** - Press `/` to filter tasks with substring and fuzzy matching
 - **Hide completed** - Toggle completed task visibility with `F1`
@@ -53,7 +53,8 @@ On first run, the app will prompt you to create a `tasks.db` database file in th
 
 | Key | Action |
 |-----|--------|
-| `a` | Add a new task after the selected task |
+| `o` | Add a new task after the selected task |
+| `a` | Edit task (cursor at end) |
 | `i` | Edit task (cursor at end) |
 | `I` | Edit task (cursor at beginning) |
 | `s` | Edit task (replace text) |
