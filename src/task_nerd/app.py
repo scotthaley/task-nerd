@@ -5,7 +5,8 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Static
+from textual.containers import Vertical
+from textual.widgets import Footer, Header, Input, Static
 
 from task_nerd.database import Database
 from task_nerd.models import TaskStatus
@@ -13,6 +14,10 @@ from task_nerd.screens import CreateDatabaseDialog
 from task_nerd.utils import parse_task_title
 from task_nerd.widgets import TaskListView
 from task_nerd.widgets.task_list import (
+    EscapePressedInList,
+    SearchCancelled,
+    SearchInputRow,
+    SearchSubmitted,
     SimpleTaskList,
     StatusBarUpdate,
     TaskCreated,
@@ -26,9 +31,12 @@ class TaskNerdApp(App):
     """A Textual app for task-nerd."""
 
     hide_completed: reactive[bool] = reactive(False, bindings=True)
+    search_mode: reactive[bool] = reactive(False)
+    search_term: reactive[str] = reactive("")
 
     BINDINGS = [
         ("a", "add_task", "Add task"),
+        ("/", "start_search", "Search"),
         ("escape", "cancel_input", "Cancel"),
         Binding("f1", "hide_completed_tasks", "Hide done"),
         Binding("f1", "show_completed_tasks", "Show done"),
@@ -62,6 +70,15 @@ class TaskNerdApp(App):
     #status-bar.hidden {
         display: none;
     }
+
+    #search-container {
+        height: auto;
+        width: 100%;
+    }
+
+    #search-container.hidden {
+        display: none;
+    }
     """
 
     def compose(self) -> ComposeResult:
@@ -69,6 +86,7 @@ class TaskNerdApp(App):
         yield Header()
         yield TaskListView()
         yield Static("", id="status-bar", classes="hidden")
+        yield Vertical(id="search-container", classes="hidden")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -133,19 +151,70 @@ class TaskNerdApp(App):
             self.notify(f"Failed to open database: {e}", severity="error")
             self.exit()
 
-    def _load_tasks(self, select_task_id: int | None = None) -> None:
+    def _load_tasks(
+        self, select_task_id: int | None = None, focus_list: bool = True
+    ) -> None:
         """Load tasks from database into the task list view.
 
         Args:
             select_task_id: If provided, select this task after loading.
+            focus_list: If True, focus the task list after loading.
         """
         if self.database:
             tasks = self.database.get_all_tasks()
             if self.hide_completed:
                 tasks = [t for t in tasks if t.status != TaskStatus.COMPLETED]
+            if self.search_term:
+                tasks = self._filter_tasks_by_search(tasks, self.search_term)
             task_list_view = self.query_one(TaskListView)
-            task_list_view.load_tasks(tasks, select_task_id=select_task_id)
-            task_list_view.focus_list()
+            is_filtered = bool(self.search_term) or self.hide_completed
+            task_list_view.load_tasks(
+                tasks,
+                select_task_id=select_task_id,
+                is_filtered=is_filtered,
+                focus_list=focus_list,
+            )
+
+    def _filter_tasks_by_search(self, tasks: list, search_term: str) -> list:
+        """Filter tasks by search term using substring and fuzzy matching.
+
+        Args:
+            tasks: List of tasks to filter.
+            search_term: The search term to match against.
+
+        Returns:
+            Filtered list of tasks.
+        """
+        if not search_term:
+            return tasks
+
+        term_lower = search_term.lower()
+        filtered = []
+        for task in tasks:
+            title_lower = task.title.lower()
+            # First try substring match
+            if term_lower in title_lower:
+                filtered.append(task)
+            # Then try fuzzy match
+            elif self._fuzzy_match(term_lower, title_lower):
+                filtered.append(task)
+        return filtered
+
+    def _fuzzy_match(self, pattern: str, text: str) -> bool:
+        """Check if all chars in pattern appear in text in order.
+
+        Args:
+            pattern: The pattern to search for.
+            text: The text to search in.
+
+        Returns:
+            True if pattern matches text fuzzily.
+        """
+        pattern_idx = 0
+        for char in text:
+            if pattern_idx < len(pattern) and char == pattern[pattern_idx]:
+                pattern_idx += 1
+        return pattern_idx == len(pattern)
 
     def action_hide_completed_tasks(self) -> None:
         """Hide completed tasks from the list."""
@@ -164,10 +233,74 @@ class TaskNerdApp(App):
 
     def action_add_task(self) -> None:
         """Show the task input field."""
-        self.query_one(TaskListView).show_input()
+        task_list_view = self.query_one(TaskListView)
+        if task_list_view._editing or self.search_mode:
+            return
+        task_list_view.show_input()
+
+    def action_start_search(self) -> None:
+        """Start search mode."""
+        task_list_view = self.query_one(TaskListView)
+        if task_list_view._editing:
+            return
+        if self.search_mode:
+            return
+
+        self.search_mode = True
+        # Hide status bar while searching
+        status_bar = self.query_one("#status-bar", Static)
+        status_bar.add_class("hidden")
+
+        # Mount search input
+        search_container = self.query_one("#search-container", Vertical)
+        search_container.remove_class("hidden")
+        search_row = SearchInputRow(initial_term=self.search_term)
+        search_container.mount(search_row)
+
+    def _exit_search_mode(self) -> None:
+        """Exit search mode and clean up search input."""
+        self.search_mode = False
+
+        # Remove search input
+        search_container = self.query_one("#search-container", Vertical)
+        try:
+            search_row = search_container.query_one(SearchInputRow)
+            search_row.remove()
+        except Exception:
+            pass
+        search_container.add_class("hidden")
+
+        # Update status bar to show current filter
+        self._update_search_status_bar()
+
+    def _update_search_status_bar(self) -> None:
+        """Update status bar to show current search term."""
+        status_bar = self.query_one("#status-bar", Static)
+        if self.search_term:
+            status_bar.update(f"/{self.search_term}")
+            status_bar.remove_class("hidden")
+        else:
+            status_bar.update("")
+            status_bar.add_class("hidden")
 
     def action_cancel_input(self) -> None:
-        """Hide the task input field or edit row."""
+        """Hide the task input field, edit row, or clear search."""
+        # If in search mode, exit search mode (keep filter)
+        if self.search_mode:
+            self._exit_search_mode()
+            task_list_view = self.query_one(TaskListView)
+            task_list_view.focus_list()
+            return
+
+        # If search term exists (and not in search mode), clear it
+        if self.search_term:
+            self.search_term = ""
+            self._update_search_status_bar()
+            task_list = self.query_one(TaskListView).query_one("#task-list", SimpleTaskList)
+            self._load_tasks(select_task_id=task_list.selected_task_id)
+            return
+
+        # Otherwise, cancel input/edit
         task_list_view = self.query_one(TaskListView)
         task_list_view.hide_input()
         task_list_view.hide_edit()
@@ -224,13 +357,66 @@ class TaskNerdApp(App):
 
     def on_status_bar_update(self, event: StatusBarUpdate) -> None:
         """Handle status bar updates from widgets."""
+        # Don't update status bar if we're in search mode
+        if self.search_mode:
+            return
         status_bar = self.query_one("#status-bar", Static)
         if event.text:
             status_bar.update(event.text)
             status_bar.remove_class("hidden")
         else:
-            status_bar.update("")
-            status_bar.add_class("hidden")
+            # If we have a search term, show it instead
+            if self.search_term:
+                status_bar.update(f"/{self.search_term}")
+                status_bar.remove_class("hidden")
+            else:
+                status_bar.update("")
+                status_bar.add_class("hidden")
+
+    def on_search_submitted(self, event: SearchSubmitted) -> None:
+        """Handle search submission."""
+        self.search_term = event.term
+        self._exit_search_mode()
+        task_list_view = self.query_one(TaskListView)
+        task_list = task_list_view.query_one("#task-list", SimpleTaskList)
+        self._load_tasks(select_task_id=task_list.selected_task_id)
+
+    def on_search_cancelled(self, event: SearchCancelled) -> None:
+        """Handle search cancellation (keep filter)."""
+        # Get current search term from input before exiting
+        try:
+            search_container = self.query_one("#search-container", Vertical)
+            search_row = search_container.query_one(SearchInputRow)
+            search_input = search_row.query_one("#search-input", Input)
+            self.search_term = search_input.value
+        except Exception:
+            pass
+
+        self._exit_search_mode()
+        task_list_view = self.query_one(TaskListView)
+        task_list = task_list_view.query_one("#task-list", SimpleTaskList)
+        self._load_tasks(select_task_id=task_list.selected_task_id)
+
+    def on_escape_pressed_in_list(self, event: EscapePressedInList) -> None:
+        """Handle escape pressed in task list - clear search if active."""
+        if self.search_term:
+            self.search_term = ""
+            self._update_search_status_bar()
+            task_list = self.query_one(TaskListView).query_one("#task-list", SimpleTaskList)
+            self._load_tasks(select_task_id=task_list.selected_task_id)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changes for live filtering."""
+        if event.input.id == "search-input" and self.search_mode:
+            self.search_term = event.value
+            task_list = self.query_one(TaskListView).query_one("#task-list", SimpleTaskList)
+            # Don't focus the list - keep focus on search input
+            self._load_tasks(select_task_id=task_list.selected_task_id, focus_list=False)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle search input submission."""
+        if event.input.id == "search-input":
+            self.post_message(SearchSubmitted(event.value))
 
     def action_toggle_dark(self) -> None:
         """Toggle dark mode."""

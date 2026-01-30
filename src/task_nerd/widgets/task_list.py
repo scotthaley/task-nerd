@@ -76,6 +76,80 @@ class InputCancelled(Message):
     pass
 
 
+class EscapePressedInList(Message):
+    """Message sent when Escape is pressed in task list with nothing to cancel."""
+
+    pass
+
+
+class SearchSubmitted(Message):
+    """Message sent when search is submitted via Enter."""
+
+    def __init__(self, term: str) -> None:
+        self.term = term
+        super().__init__()
+
+
+class SearchCancelled(Message):
+    """Message sent when search is cancelled via Escape."""
+
+    pass
+
+
+class SearchInputRow(Horizontal):
+    """An inline input row for search/filter."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    SearchInputRow {
+        height: 1;
+        padding: 0 1;
+        width: 100%;
+        background: $surface;
+    }
+
+    SearchInputRow .search-prefix {
+        width: 2;
+        height: 1;
+    }
+
+    SearchInputRow Input {
+        border: none;
+        background: transparent;
+        padding: 0;
+        height: 1;
+        width: 1fr;
+    }
+
+    SearchInputRow Input:focus {
+        border: none;
+    }
+    """
+
+    def __init__(self, initial_term: str = "") -> None:
+        super().__init__()
+        self._initial_term = initial_term
+
+    def compose(self) -> ComposeResult:
+        yield Static("/", classes="search-prefix")
+        yield Input(value=self._initial_term, id="search-input")
+
+    def on_mount(self) -> None:
+        self.call_later(self._focus_input)
+
+    def _focus_input(self) -> None:
+        input_widget = self.query_one(Input)
+        input_widget.focus()
+        input_widget.cursor_position = len(input_widget.value)
+
+    def action_cancel(self) -> None:
+        """Handle Escape key - exit search mode."""
+        self.post_message(SearchCancelled())
+
+
 class CategoryRow(Static):
     """A non-selectable header row for a category group."""
 
@@ -415,10 +489,13 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
             self.post_message(TaskDeleted(self.selected_task_id))
 
     def action_cancel_delete(self) -> None:
-        """Cancel pending delete operation."""
+        """Cancel pending delete operation or notify app of escape press."""
         if self._delete_pending:
             self._delete_pending = False
             self.post_message(StatusBarUpdate(""))
+        else:
+            # Nothing to cancel locally, let the app handle it
+            self.post_message(EscapePressedInList())
 
     def action_edit_append(self) -> None:
         """Edit task with cursor at end (append mode)."""
@@ -467,26 +544,39 @@ class TaskListView(Vertical):
         self._tasks: list[Task] = []
         self._editing = False
         self._editing_task_row: TaskRow | None = None
+        self._is_filtered = False
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="input-container")
         yield SimpleTaskList(id="task-list")
 
-    def load_tasks(self, tasks: list[Task], select_task_id: int | None = None) -> None:
+    def load_tasks(
+        self,
+        tasks: list[Task],
+        select_task_id: int | None = None,
+        is_filtered: bool = False,
+        focus_list: bool = True,
+    ) -> None:
         """Load tasks into the list view.
 
         Args:
             tasks: List of tasks to display.
             select_task_id: If provided, select this task after loading.
+            is_filtered: If True, show "No matching tasks" when empty.
+            focus_list: If True, focus the task list after loading.
         """
         self._tasks = tasks
-        self._refresh_list(select_task_id=select_task_id)
+        self._is_filtered = is_filtered
+        self._refresh_list(select_task_id=select_task_id, focus_list=focus_list)
 
-    def _refresh_list(self, select_task_id: int | None = None) -> None:
+    def _refresh_list(
+        self, select_task_id: int | None = None, focus_list: bool = True
+    ) -> None:
         """Refresh the task list with current tasks.
 
         Args:
             select_task_id: If provided, select this task after rebuilding the list.
+            focus_list: If True, focus the task list after refreshing.
         """
         task_list = self.query_one("#task-list", SimpleTaskList)
 
@@ -496,6 +586,9 @@ class TaskListView(Vertical):
         # Remove all children - await will complete the removal before continuing
         task_list.remove_children()
 
+        # Capture focus_list in closure
+        should_focus = focus_list
+
         def do_mount() -> None:
             tl = self.query_one("#task-list", SimpleTaskList)
             tl._task_ids = []
@@ -504,11 +597,12 @@ class TaskListView(Vertical):
                 try:
                     self.query_one("#empty-message")
                 except Exception:
-                    self.mount(
-                        Static(
-                            "No tasks yet. Press 'a' to add one.", id="empty-message"
-                        )
+                    empty_text = (
+                        "No matching tasks."
+                        if self._is_filtered
+                        else "No tasks yet. Press 'a' to add one."
                     )
+                    self.mount(Static(empty_text, id="empty-message"))
             else:
                 try:
                     empty_msg = self.query_one("#empty-message")
@@ -537,7 +631,8 @@ class TaskListView(Vertical):
             else:
                 tl.selected_task_id = None
 
-            tl.focus()
+            if should_focus:
+                tl.focus()
 
         self.call_after_refresh(do_mount)
 
