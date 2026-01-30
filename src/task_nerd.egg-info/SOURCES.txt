@@ -15,4 +15,5 @@ src/task_nerd.egg-info/top_level.txt
 src/task_nerd/screens/__init__.py
 src/task_nerd/screens/dialogs.py
 src/task_nerd/widgets/__init__.py
+src/task_nerd/widgets/header.py
 src/task_nerd/widgets/task_list.py

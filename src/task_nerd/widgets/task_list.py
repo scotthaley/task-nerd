@@ -444,7 +444,7 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
             try:
                 new_row = self.query_one(f"TaskRow#task-{new_id}", TaskRow)
                 new_row.add_class("-selected")
-                new_row.scroll_visible()
+                self.scroll_to_widget(new_row)
             except Exception:
                 pass
 
