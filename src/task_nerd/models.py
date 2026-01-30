@@ -28,6 +28,7 @@ class Task:
     order_value: int
     created_at: datetime
     updated_at: datetime
+    completed_at: datetime | None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Task":
@@ -42,4 +43,5 @@ class Task:
             order_value=row["order_value"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
         )

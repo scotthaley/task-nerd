@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Generator
 if TYPE_CHECKING:
     from task_nerd.models import Task, TaskStatus
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class Database:
@@ -44,7 +44,8 @@ class Database:
                     category TEXT DEFAULT NULL,
                     order_value INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    completed_at TEXT DEFAULT NULL
                 )
             """)
 
@@ -143,6 +144,21 @@ class Database:
                     "INSERT INTO schema_version (version) VALUES (?)", (3,)
                 )
                 conn.commit()
+                current_version = 3
+
+            # Migration v3 -> v4: Add completed_at column
+            if current_version < 4:
+                cursor.execute(
+                    "ALTER TABLE tasks ADD COLUMN completed_at TEXT DEFAULT NULL"
+                )
+                # Backfill existing completed tasks with updated_at
+                cursor.execute(
+                    "UPDATE tasks SET completed_at = updated_at WHERE status = 'completed'"
+                )
+                cursor.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)", (4,)
+                )
+                conn.commit()
 
     def get_all_tasks(self) -> list["Task"]:
         """Fetch all tasks ordered by category, then by order_value within each category.
@@ -155,7 +171,7 @@ class Database:
         with self.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, title, description, status, priority, category, order_value, created_at, updated_at
+                SELECT id, title, description, status, priority, category, order_value, created_at, updated_at, completed_at
                 FROM tasks
                 ORDER BY
                     CASE WHEN category IS NULL THEN 0 ELSE 1 END,
@@ -186,7 +202,7 @@ class Database:
             )
             conn.commit()
             cursor.execute(
-                "SELECT id, title, description, status, priority, category, order_value, created_at, updated_at FROM tasks WHERE id = ?",
+                "SELECT id, title, description, status, priority, category, order_value, created_at, updated_at, completed_at FROM tasks WHERE id = ?",
                 (cursor.lastrowid,),
             )
             return Task.from_row(dict(cursor.fetchone()))
@@ -197,10 +213,16 @@ class Database:
 
         with self.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?",
-                (status.value, task_id)
-            )
+            if status == TaskStatus.COMPLETED:
+                cursor.execute(
+                    "UPDATE tasks SET status = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+                    (status.value, task_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE tasks SET status = ?, completed_at = NULL, updated_at = datetime('now') WHERE id = ?",
+                    (status.value, task_id)
+                )
             conn.commit()
 
     def update_task_title(self, task_id: int, title: str) -> None:
@@ -245,7 +267,7 @@ class Database:
             )
             conn.commit()
             cursor.execute(
-                "SELECT id, title, description, status, priority, category, order_value, created_at, updated_at FROM tasks WHERE id = ?",
+                "SELECT id, title, description, status, priority, category, order_value, created_at, updated_at, completed_at FROM tasks WHERE id = ?",
                 (cursor.lastrowid,),
             )
             return Task.from_row(dict(cursor.fetchone()))

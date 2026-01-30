@@ -13,6 +13,7 @@ else:
 CONFIG_FILE = Path.home() / ".config" / "task-nerd" / "task-nerd.toml"
 
 DEFAULT_THEME = "catppuccin-mocha"
+DEFAULT_COMPLETED_DATE_FORMAT = "%m/%d/%y"
 
 
 @dataclass
@@ -45,6 +46,7 @@ class Config:
 
     theme: str = DEFAULT_THEME
     custom_theme: CustomThemeConfig | None = None
+    completed_date_format: str = DEFAULT_COMPLETED_DATE_FORMAT
 
 
 def load_config() -> Config:
@@ -85,6 +87,10 @@ def _parse_config(data: dict[str, Any]) -> Config:
     # Load theme name
     if "theme" in data and isinstance(data["theme"], str):
         config.theme = data["theme"]
+
+    # Load completed date format
+    if "completed_date_format" in data and isinstance(data["completed_date_format"], str):
+        config.completed_date_format = data["completed_date_format"]
 
     # Load custom theme if present
     if "custom_theme" in data and isinstance(data["custom_theme"], dict):

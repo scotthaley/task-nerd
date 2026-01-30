@@ -2,6 +2,7 @@
 
 from enum import Enum, auto
 
+from rich.table import Table
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -11,6 +12,8 @@ from textual.widgets import Input, Static
 from textual.widgets._input import Selection
 
 from task_nerd.models import Task, TaskStatus
+
+DEFAULT_COMPLETED_DATE_FORMAT = "%m/%d/%y"
 
 
 class EditMode(Enum):
@@ -197,7 +200,6 @@ class TaskRow(Static):
     }
 
     TaskRow.-completed {
-        text-style: strike;
         color: $text-muted;
     }
 
@@ -210,18 +212,44 @@ class TaskRow(Static):
     }
     """
 
-    def __init__(self, task: Task, indented: bool = False) -> None:
+    def __init__(
+        self,
+        task: Task,
+        indented: bool = False,
+        completed_date_format: str = DEFAULT_COMPLETED_DATE_FORMAT,
+    ) -> None:
         self.task_id = task.id
         self.task_data = task
         self._indented = indented
-        status_indicator = self._get_status_indicator(task.status)
-        prefix = "  " if indented else ""
-        super().__init__(f"{prefix}{status_indicator} {task.title}")
+
+        content = self._build_content(task, completed_date_format)
+        super().__init__(content)
 
         if task.status == TaskStatus.COMPLETED:
             self.add_class("-completed")
         if indented:
             self.add_class("-indented")
+
+    def _build_content(self, task: Task, date_format: str) -> Table | str:
+        """Build the content for this task row."""
+        status_indicator = self._get_status_indicator(task.status)
+        prefix = "  " if self._indented else ""
+        task_text = f"{prefix}{status_indicator} {task.title}"
+
+        if task.status == TaskStatus.COMPLETED:
+            # Apply strikethrough to task text only
+            task_text = f"[strike]{task_text}[/strike]"
+
+            if task.completed_at:
+                date_str = task.completed_at.strftime(date_format)
+
+                table = Table(box=None, show_header=False, expand=True, padding=(0, 0))
+                table.add_column(ratio=1, overflow="fold")
+                table.add_column(width=len(date_str), justify="right")
+                table.add_row(task_text, date_str)
+                return table
+
+        return task_text
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
         # Backslash escapes brackets to prevent Rich markup interpretation
@@ -674,12 +702,15 @@ class TaskListView(Vertical):
     }
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, completed_date_format: str = DEFAULT_COMPLETED_DATE_FORMAT
+    ) -> None:
         super().__init__()
         self._tasks: list[Task] = []
         self._editing = False
         self._editing_task_row: TaskRow | None = None
         self._is_filtered = False
+        self._completed_date_format = completed_date_format
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="input-container")
@@ -753,7 +784,11 @@ class TaskListView(Vertical):
                             tl.mount(CategoryRow(current_category))
 
                     indented = task.category is not None
-                    row = TaskRow(task, indented=indented)
+                    row = TaskRow(
+                        task,
+                        indented=indented,
+                        completed_date_format=self._completed_date_format,
+                    )
                     row.id = f"task-{task.id}"
                     tl.mount(row)
                     tl._task_ids.append(task.id)

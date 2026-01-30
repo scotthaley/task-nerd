@@ -129,7 +129,7 @@ class TaskNerdApp(App):
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield AsciiArtHeader()
-        yield TaskListView()
+        yield TaskListView(completed_date_format=self._config.completed_date_format)
         yield Static("", id="status-bar", classes="hidden")
         yield Vertical(id="search-container", classes="hidden")
         yield Footer()
