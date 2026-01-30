@@ -3,9 +3,12 @@
 from pathlib import Path
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.reactive import reactive
 from textual.widgets import Footer, Header, Static
 
 from task_nerd.database import Database
+from task_nerd.models import TaskStatus
 from task_nerd.screens import CreateDatabaseDialog
 from task_nerd.utils import parse_task_title
 from task_nerd.widgets import TaskListView
@@ -22,12 +25,24 @@ from task_nerd.widgets.task_list import (
 class TaskNerdApp(App):
     """A Textual app for task-nerd."""
 
+    hide_completed: reactive[bool] = reactive(False, bindings=True)
+
     BINDINGS = [
         ("a", "add_task", "Add task"),
         ("escape", "cancel_input", "Cancel"),
+        Binding("f1", "hide_completed_tasks", "Hide done"),
+        Binding("f1", "show_completed_tasks", "Show done"),
         ("D", "toggle_dark", "Toggle dark mode"),
         ("q", "quit", "Quit"),
     ]
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Control which F1 binding is shown based on current state."""
+        if action == "hide_completed_tasks":
+            return not self.hide_completed
+        if action == "show_completed_tasks":
+            return self.hide_completed
+        return True
 
     def __init__(self) -> None:
         """Initialize the application."""
@@ -126,9 +141,26 @@ class TaskNerdApp(App):
         """
         if self.database:
             tasks = self.database.get_all_tasks()
+            if self.hide_completed:
+                tasks = [t for t in tasks if t.status != TaskStatus.COMPLETED]
             task_list_view = self.query_one(TaskListView)
             task_list_view.load_tasks(tasks, select_task_id=select_task_id)
             task_list_view.focus_list()
+
+    def action_hide_completed_tasks(self) -> None:
+        """Hide completed tasks from the list."""
+        self.hide_completed = True
+        self._refresh_after_hide_toggle()
+
+    def action_show_completed_tasks(self) -> None:
+        """Show completed tasks in the list."""
+        self.hide_completed = False
+        self._refresh_after_hide_toggle()
+
+    def _refresh_after_hide_toggle(self) -> None:
+        """Refresh the task list after toggling hide completed state."""
+        task_list = self.query_one(TaskListView).query_one("#task-list", SimpleTaskList)
+        self._load_tasks(select_task_id=task_list.selected_task_id)
 
     def action_add_task(self) -> None:
         """Show the task input field."""
