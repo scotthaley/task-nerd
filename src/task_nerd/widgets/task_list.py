@@ -32,10 +32,12 @@ class TaskCreated(Message):
         title: str,
         default_category: str | None = None,
         after_task_id: int | None = None,
+        before_task_id: int | None = None,
     ) -> None:
         self.title = title
         self.default_category = default_category
         self.after_task_id = after_task_id
+        self.before_task_id = before_task_id
         super().__init__()
 
 
@@ -297,17 +299,23 @@ class NewTaskInputRow(Horizontal):
     NewTaskInputRow Input:focus {
         border: none;
     }
+
+    NewTaskInputRow.-editing {
+        background: $accent;
+    }
     """
 
     def __init__(
         self,
         default_category: str | None = None,
         after_task_id: int | None = None,
+        before_task_id: int | None = None,
         indented: bool = False,
     ) -> None:
         super().__init__()
         self.default_category = default_category
         self.after_task_id = after_task_id
+        self.before_task_id = before_task_id
         self._indented = indented
 
     def compose(self) -> ComposeResult:
@@ -361,6 +369,10 @@ class EditTaskInputRow(Horizontal):
 
     EditTaskInputRow Input:focus {
         border: none;
+    }
+
+    EditTaskInputRow.-editing {
+        background: $accent;
     }
     """
 
@@ -809,8 +821,12 @@ class TaskListView(Vertical):
 
         self.call_after_refresh(do_mount)
 
-    def show_input(self) -> None:
-        """Show an inline input row after the selected task."""
+    def show_input(self, insert_above: bool = False) -> None:
+        """Show an inline input row for creating a new task.
+
+        Args:
+            insert_above: If True, insert above the selected task instead of below.
+        """
         if self._editing:
             return
         self._editing = True
@@ -826,28 +842,93 @@ class TaskListView(Vertical):
 
         default_category: str | None = None
         after_task_id: int | None = None
+        before_task_id: int | None = None
         indented = False
+        mount_before_row = None
+        mount_after_row = None
 
         if selected_task is not None:
-            default_category = selected_task.category
-            after_task_id = selected_task.id
-            indented = selected_task.category is not None
+            if insert_above:
+                # Find the index of the selected task
+                try:
+                    idx = task_list._task_ids.index(selected_task.id)
+                except ValueError:
+                    idx = -1
+
+                if idx == 0:
+                    # First task overall - new task will be uncategorized
+                    default_category = None
+                    before_task_id = selected_task.id
+                    indented = False
+
+                    # Mount before the CategoryRow if there is one, else before TaskRow
+                    selected_row = task_list.get_selected_task_row()
+                    if selected_row is not None and selected_task.category is not None:
+                        # The first task has a category, find the CategoryRow before it
+                        children = list(task_list.children)
+                        try:
+                            row_idx = children.index(selected_row)
+                            if row_idx > 0 and isinstance(
+                                children[row_idx - 1], CategoryRow
+                            ):
+                                mount_before_row = children[row_idx - 1]
+                            else:
+                                mount_before_row = selected_row
+                        except (ValueError, IndexError):
+                            mount_before_row = selected_row
+                    else:
+                        mount_before_row = selected_row
+                else:
+                    # Get the previous task and mount after it
+                    prev_task_id = task_list._task_ids[idx - 1]
+                    try:
+                        prev_row = task_list.query_one(
+                            f"TaskRow#task-{prev_task_id}", TaskRow
+                        )
+                        prev_task = prev_row.task_data
+                        default_category = prev_task.category
+                        after_task_id = prev_task.id
+                        indented = prev_task.category is not None
+                        mount_after_row = prev_row
+                    except Exception:
+                        # Fallback
+                        default_category = selected_task.category
+                        before_task_id = selected_task.id
+                        indented = selected_task.category is not None
+                        mount_before_row = task_list.get_selected_task_row()
+            else:
+                # Insert below (original behavior)
+                default_category = selected_task.category
+                after_task_id = selected_task.id
+                indented = selected_task.category is not None
 
         new_row = NewTaskInputRow(
             default_category=default_category,
             after_task_id=after_task_id,
+            before_task_id=before_task_id,
             indented=indented,
         )
+        new_row.add_class("-editing")
 
-        selected_row = task_list.get_selected_task_row()
-        if selected_row is not None:
-            task_list.mount(new_row, after=selected_row)
+        # Clear selection styling from other tasks while editing
+        self._clear_selection_styling()
+
+        if insert_above and mount_before_row is not None:
+            # Mount before the selected task row or its category header
+            task_list.mount(new_row, before=mount_before_row)
+        elif insert_above and mount_after_row is not None:
+            # Mount after the previous task row (places it in that category)
+            task_list.mount(new_row, after=mount_after_row)
         else:
-            if task_list.children:
-                task_list.mount(new_row)
+            selected_row = task_list.get_selected_task_row()
+            if selected_row is not None:
+                task_list.mount(new_row, after=selected_row)
             else:
-                input_container = self.query_one("#input-container", Vertical)
-                input_container.mount(new_row)
+                if task_list.children:
+                    task_list.mount(new_row)
+                else:
+                    input_container = self.query_one("#input-container", Vertical)
+                    input_container.mount(new_row)
 
     def hide_input(self) -> None:
         """Remove the inline input row for new tasks."""
@@ -876,6 +957,7 @@ class TaskListView(Vertical):
         task = task_row.task_data
         indented = task.category is not None
         edit_row = EditTaskInputRow(task, mode, indented=indented)
+        edit_row.add_class("-editing")
 
         task_list = self.query_one("#task-list", SimpleTaskList)
         task_list.mount(edit_row, after=task_row)
@@ -892,6 +974,12 @@ class TaskListView(Vertical):
         task_id_to_restore = task_list.selected_task_id
 
         self._refresh_list(select_task_id=task_id_to_restore)
+
+    def _clear_selection_styling(self) -> None:
+        """Remove -selected class from all task rows while editing."""
+        task_list = self.query_one("#task-list", SimpleTaskList)
+        for row in task_list.query(TaskRow):
+            row.remove_class("-selected")
 
     def focus_list(self) -> None:
         """Focus the task list for keyboard navigation."""
@@ -912,15 +1000,18 @@ class TaskListView(Vertical):
                 new_task_row = self.query_one(NewTaskInputRow)
                 default_category = new_task_row.default_category
                 after_task_id = new_task_row.after_task_id
+                before_task_id = new_task_row.before_task_id
             except Exception:
                 default_category = None
                 after_task_id = None
+                before_task_id = None
 
             self.post_message(
                 TaskCreated(
                     event.value.strip(),
                     default_category=default_category,
                     after_task_id=after_task_id,
+                    before_task_id=before_task_id,
                 )
             )
             self._editing = False

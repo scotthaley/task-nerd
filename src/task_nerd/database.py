@@ -243,14 +243,19 @@ class Database:
             conn.commit()
 
     def create_task_at_position(
-        self, title: str, category: str | None = None, after_task_id: int | None = None
+        self,
+        title: str,
+        category: str | None = None,
+        after_task_id: int | None = None,
+        before_task_id: int | None = None,
     ) -> "Task":
-        """Create a new task positioned after the specified task within its category.
+        """Create a new task positioned after or before the specified task.
 
         Args:
             title: The task title
             category: Optional category for the task
             after_task_id: ID of task to insert after, or None to append at end of category
+            before_task_id: ID of task to insert before (takes precedence if both provided)
 
         Returns:
             The created Task
@@ -259,7 +264,13 @@ class Database:
 
         with self.connection() as conn:
             cursor = conn.cursor()
-            order_value = self._get_next_order_value(cursor, after_task_id, category)
+
+            if before_task_id is not None:
+                order_value = self._get_order_value_before(
+                    cursor, before_task_id, category
+                )
+            else:
+                order_value = self._get_next_order_value(cursor, after_task_id, category)
 
             cursor.execute(
                 "INSERT INTO tasks (title, category, order_value) VALUES (?, ?, ?)",
@@ -370,6 +381,88 @@ class Database:
             return after_order + 1000
 
         return (after_order + next_row["order_value"]) // 2
+
+    def _get_order_value_before(
+        self, cursor: "sqlite3.Cursor", before_task_id: int, category: str | None
+    ) -> int:
+        """Calculate the order_value for insertion before the given task.
+
+        Args:
+            cursor: Database cursor to use
+            before_task_id: ID of task to insert before
+            category: The category the new task will belong to
+
+        Returns:
+            The order_value to use for the new task
+        """
+        # Build category filter for queries
+        if category is None:
+            category_filter = "category IS NULL"
+            category_params: tuple = ()
+        else:
+            category_filter = "category = ?"
+            category_params = (category,)
+
+        # Get the order_value of the task we're inserting before
+        cursor.execute(
+            "SELECT order_value FROM tasks WHERE id = ?", (before_task_id,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            # Task not found, append at end of category
+            cursor.execute(
+                f"SELECT MAX(order_value) as max_order FROM tasks WHERE {category_filter}",
+                category_params,
+            )
+            row = cursor.fetchone()
+            max_order = row["max_order"] if row["max_order"] is not None else 0
+            return max_order + 1000
+
+        before_order = row["order_value"]
+
+        # Find the previous task's order_value within the target category
+        cursor.execute(
+            f"SELECT order_value FROM tasks WHERE {category_filter} AND order_value < ? ORDER BY order_value DESC LIMIT 1",
+            category_params + (before_order,),
+        )
+        prev_row = cursor.fetchone()
+
+        if prev_row is None:
+            # No task before in this category, use before_order - 1000
+            # (or 500 if that would be <= 0)
+            new_order = before_order - 1000
+            if new_order <= 0:
+                new_order = before_order // 2 if before_order > 1 else 1
+            return new_order
+
+        prev_order = prev_row["order_value"]
+        gap = before_order - prev_order
+
+        if gap > 1:
+            # Use midpoint
+            return (prev_order + before_order) // 2
+
+        # Gap exhausted - rebalance tasks in this category
+        self._rebalance_order_values(cursor, category)
+
+        # Re-fetch the before_order since it may have changed
+        cursor.execute(
+            "SELECT order_value FROM tasks WHERE id = ?", (before_task_id,)
+        )
+        row = cursor.fetchone()
+        before_order = row["order_value"]
+
+        # Find the previous task's order_value again
+        cursor.execute(
+            f"SELECT order_value FROM tasks WHERE {category_filter} AND order_value < ? ORDER BY order_value DESC LIMIT 1",
+            category_params + (before_order,),
+        )
+        prev_row = cursor.fetchone()
+
+        if prev_row is None:
+            return before_order - 1000 if before_order > 1000 else before_order // 2
+
+        return (prev_row["order_value"] + before_order) // 2
 
     def _rebalance_order_values(
         self, cursor: "sqlite3.Cursor", category: str | None

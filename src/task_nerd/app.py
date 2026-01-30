@@ -39,6 +39,7 @@ class TaskNerdApp(App):
 
     BINDINGS = [
         ("o", "add_task", "Add task"),
+        ("O", "add_task_above", "Add task above"),
         ("/", "start_search", "Search"),
         ("escape", "cancel_input", "Cancel"),
         Binding("f1", "hide_completed_tasks", "Hide done"),
@@ -283,6 +284,13 @@ class TaskNerdApp(App):
             return
         task_list_view.show_input()
 
+    def action_add_task_above(self) -> None:
+        """Show the task input field above the current task."""
+        task_list_view = self.query_one(TaskListView)
+        if task_list_view._editing or self.search_mode:
+            return
+        task_list_view.show_input(insert_above=True)
+
     def action_start_search(self) -> None:
         """Start search mode."""
         task_list_view = self.query_one(TaskListView)
@@ -362,7 +370,10 @@ class TaskNerdApp(App):
                 else event.default_category
             )
             new_task = self.database.create_task_at_position(
-                title, category, event.after_task_id
+                title,
+                category,
+                after_task_id=event.after_task_id,
+                before_task_id=event.before_task_id,
             )
             self._load_tasks(select_task_id=new_task.id)
             # Show a new input row for continuous task creation (after refresh completes)
@@ -493,6 +504,14 @@ class TaskNerdApp(App):
 
 def main() -> None:
     """Run the application."""
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "version":
+        from importlib.metadata import version
+
+        print(f"task-nerd {version('task-nerd')}")
+        return
+
     app = TaskNerdApp()
     app.run()
 

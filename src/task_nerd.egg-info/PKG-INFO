@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: task-nerd
-Version: 0.2.0
+Version: 0.3.0
 Summary: A Textual TUI application
 Requires-Python: >=3.10
 Requires-Dist: textual>=0.85.0
