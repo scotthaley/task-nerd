@@ -13,6 +13,7 @@ from task_nerd.widgets.task_list import (
     StatusBarUpdate,
     TaskCreated,
     TaskDeleted,
+    TaskEdited,
     TaskList,
     TaskListItem,
     TaskStatusToggled,
@@ -129,12 +130,17 @@ class TaskNerdApp(App):
         self.query_one(TaskListView).show_input()
 
     def action_cancel_input(self) -> None:
-        """Hide the task input field."""
-        self.query_one(TaskListView).hide_input()
+        """Hide the task input field or edit row."""
+        task_list_view = self.query_one(TaskListView)
+        task_list_view.hide_input()
+        task_list_view.hide_edit()
 
     def on_task_created(self, event: TaskCreated) -> None:
         """Handle task creation from the task list widget."""
         if self.database:
+            task_list_view = self.query_one(TaskListView)
+            # Clean up input mode
+            task_list_view.hide_input()
             title, explicit_category = parse_task_title(event.title)
             # Use explicit category if provided (user typed #tag), otherwise inherit
             category = explicit_category if explicit_category is not None else event.default_category
@@ -186,6 +192,26 @@ class TaskNerdApp(App):
                 task_list.focus()
 
             self.call_after_refresh(restore_selection)
+
+    def on_task_edited(self, event: TaskEdited) -> None:
+        """Handle task title edit from the task list widget."""
+        if self.database:
+            task_list_view = self.query_one(TaskListView)
+            # Clean up edit mode
+            task_list_view.hide_edit()
+            self.database.update_task_title(event.task_id, event.new_title)
+            self._load_tasks()
+
+            # Select the edited task
+            def select_edited_task() -> None:
+                task_list = task_list_view.query_one("#task-list", TaskList)
+                for idx, child in enumerate(task_list.children):
+                    if isinstance(child, TaskListItem) and child._task_data.id == event.task_id:
+                        task_list.index = idx
+                        break
+                task_list.focus()
+
+            self.call_after_refresh(select_edited_task)
 
     def on_status_bar_update(self, event: StatusBarUpdate) -> None:
         """Handle status bar updates from widgets."""

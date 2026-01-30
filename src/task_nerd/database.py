@@ -203,6 +203,16 @@ class Database:
             )
             conn.commit()
 
+    def update_task_title(self, task_id: int, title: str) -> None:
+        """Update the title of a task."""
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE tasks SET title = ?, updated_at = datetime('now') WHERE id = ?",
+                (title, task_id)
+            )
+            conn.commit()
+
     def delete_task(self, task_id: int) -> None:
         """Delete a task by ID."""
         with self.connection() as conn:
