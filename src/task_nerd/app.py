@@ -7,14 +7,14 @@ from textual.binding import Binding
 from textual.reactive import reactive
 from textual.containers import Vertical
 from textual.theme import Theme
-from textual.widgets import Footer, Header, Input, Static
+from textual.widgets import Footer, Input, Static
 
 from task_nerd.config import load_config
 from task_nerd.database import Database
 from task_nerd.models import TaskStatus
 from task_nerd.screens import CreateDatabaseDialog
 from task_nerd.utils import parse_task_title
-from task_nerd.widgets import TaskListView
+from task_nerd.widgets import AsciiArtHeader, TaskListView
 from task_nerd.widgets.task_list import (
     EscapePressedInList,
     SearchCancelled,
@@ -127,7 +127,7 @@ class TaskNerdApp(App):
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
-        yield Header()
+        yield AsciiArtHeader()
         yield TaskListView()
         yield Static("", id="status-bar", classes="hidden")
         yield Vertical(id="search-container", classes="hidden")
