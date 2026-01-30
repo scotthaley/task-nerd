@@ -124,13 +124,14 @@ class TaskRow(Static):
             self.add_class("-indented")
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
+        # Backslash escapes brackets to prevent Rich markup interpretation
         indicators = {
-            TaskStatus.PENDING: "[ ]",
-            TaskStatus.IN_PROGRESS: "[~]",
-            TaskStatus.COMPLETED: "[x]",
-            TaskStatus.CANCELLED: "[-]",
+            TaskStatus.PENDING: r"\[ ]",
+            TaskStatus.IN_PROGRESS: r"\[~]",
+            TaskStatus.COMPLETED: r"\[x]",
+            TaskStatus.CANCELLED: r"\[-]",
         }
-        return indicators.get(status, "[ ]")
+        return indicators.get(status, r"\[ ]")
 
 
 class NewTaskInputRow(Horizontal):
@@ -184,7 +185,7 @@ class NewTaskInputRow(Horizontal):
     def compose(self) -> ComposeResult:
         if self._indented:
             yield Static("  ", classes="indent-prefix")
-        yield Static("[ ] ", classes="status-prefix")
+        yield Static(r"\[ ] ", classes="status-prefix")
         yield Input(id="new-task-input")
 
     def on_mount(self) -> None:
@@ -259,13 +260,14 @@ class EditTaskInputRow(Horizontal):
         yield Input(value=initial_value, id="edit-task-input", select_on_focus=False)
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
+        # Backslash escapes brackets to prevent Rich markup interpretation
         indicators = {
-            TaskStatus.PENDING: "[ ] ",
-            TaskStatus.IN_PROGRESS: "[~] ",
-            TaskStatus.COMPLETED: "[x] ",
-            TaskStatus.CANCELLED: "[-] ",
+            TaskStatus.PENDING: r"\[ ] ",
+            TaskStatus.IN_PROGRESS: r"\[~] ",
+            TaskStatus.COMPLETED: r"\[x] ",
+            TaskStatus.CANCELLED: r"\[-] ",
         }
-        return indicators.get(status, "[ ] ")
+        return indicators.get(status, r"\[ ] ")
 
     def on_mount(self) -> None:
         self.call_later(self._focus_input)
