@@ -10,12 +10,11 @@ from task_nerd.screens import CreateDatabaseDialog
 from task_nerd.utils import parse_task_title
 from task_nerd.widgets import TaskListView
 from task_nerd.widgets.task_list import (
+    SimpleTaskList,
     StatusBarUpdate,
     TaskCreated,
     TaskDeleted,
     TaskEdited,
-    TaskList,
-    TaskListItem,
     TaskStatusToggled,
 )
 
@@ -59,6 +58,8 @@ class TaskNerdApp(App):
 
     def on_mount(self) -> None:
         """Handle application mount - check for database."""
+        self.theme = "catppuccin-mocha"
+
         if not self.db_path.exists():
             self.push_screen(CreateDatabaseDialog(self.db_path), self._on_dialog_result)
         else:
@@ -117,12 +118,16 @@ class TaskNerdApp(App):
             self.notify(f"Failed to open database: {e}", severity="error")
             self.exit()
 
-    def _load_tasks(self) -> None:
-        """Load tasks from database into the task list view."""
+    def _load_tasks(self, select_task_id: int | None = None) -> None:
+        """Load tasks from database into the task list view.
+
+        Args:
+            select_task_id: If provided, select this task after loading.
+        """
         if self.database:
             tasks = self.database.get_all_tasks()
             task_list_view = self.query_one(TaskListView)
-            task_list_view.load_tasks(tasks)
+            task_list_view.load_tasks(tasks, select_task_id=select_task_id)
             task_list_view.focus_list()
 
     def action_add_task(self) -> None:
@@ -139,79 +144,51 @@ class TaskNerdApp(App):
         """Handle task creation from the task list widget."""
         if self.database:
             task_list_view = self.query_one(TaskListView)
-            # Clean up input mode
             task_list_view.hide_input()
             title, explicit_category = parse_task_title(event.title)
-            # Use explicit category if provided (user typed #tag), otherwise inherit
-            category = explicit_category if explicit_category is not None else event.default_category
+            category = (
+                explicit_category
+                if explicit_category is not None
+                else event.default_category
+            )
             new_task = self.database.create_task_at_position(
                 title, category, event.after_task_id
             )
-            self._load_tasks()
-
-            # Select the newly created task
-            def select_new_task() -> None:
-                task_list_view = self.query_one(TaskListView)
-                task_list = task_list_view.query_one("#task-list", TaskList)
-                for idx, child in enumerate(task_list.children):
-                    if isinstance(child, TaskListItem) and child._task_data.id == new_task.id:
-                        task_list.index = idx
-                        break
-                task_list.focus()
-
-            self.call_after_refresh(select_new_task)
+            self._load_tasks(select_task_id=new_task.id)
 
     def on_task_status_toggled(self, event: TaskStatusToggled) -> None:
         """Handle task status toggle from the task list widget."""
         if self.database:
-            task_list_view = self.query_one(TaskListView)
-            task_list = task_list_view.query_one("#task-list")
-            current_index = task_list.index
             self.database.update_task_status(event.task_id, event.new_status)
-            self._load_tasks()
-
-            def restore_selection() -> None:
-                task_list.index = current_index
-                task_list.focus()
-
-            self.call_after_refresh(restore_selection)
+            self._load_tasks(select_task_id=event.task_id)
 
     def on_task_deleted(self, event: TaskDeleted) -> None:
         """Handle task deletion from the task list widget."""
         if self.database:
             task_list_view = self.query_one(TaskListView)
-            task_list = task_list_view.query_one("#task-list")
-            current_index = task_list.index
+            task_list = task_list_view.query_one("#task-list", SimpleTaskList)
+
+            # Find the next task to select after deletion
+            next_task_id: int | None = None
+            try:
+                idx = task_list._task_ids.index(event.task_id)
+                if idx < len(task_list._task_ids) - 1:
+                    next_task_id = task_list._task_ids[idx + 1]
+                elif idx > 0:
+                    next_task_id = task_list._task_ids[idx - 1]
+            except ValueError:
+                pass
+
             self.database.delete_task(event.task_id)
-            self._load_tasks()
-
-            def restore_selection() -> None:
-                # Adjust index if we deleted the last item
-                max_index = len(task_list.children) - 1
-                task_list.index = min(current_index, max_index)
-                task_list.focus()
-
-            self.call_after_refresh(restore_selection)
+            self._load_tasks(select_task_id=next_task_id)
 
     def on_task_edited(self, event: TaskEdited) -> None:
         """Handle task title edit from the task list widget."""
         if self.database:
             task_list_view = self.query_one(TaskListView)
-            # Clean up edit mode
             task_list_view.hide_edit()
             self.database.update_task_title(event.task_id, event.new_title)
-            self._load_tasks()
-
-            # Select the edited task
-            def select_edited_task() -> None:
-                task_list = task_list_view.query_one("#task-list", TaskList)
-                for idx, child in enumerate(task_list.children):
-                    if isinstance(child, TaskListItem) and child._task_data.id == event.task_id:
-                        task_list.index = idx
-                        break
-                task_list.focus()
-
-            self.call_after_refresh(select_edited_task)
+            self._load_tasks(select_task_id=event.task_id)
 
     def on_status_bar_update(self, event: StatusBarUpdate) -> None:
         """Handle status bar updates from widgets."""

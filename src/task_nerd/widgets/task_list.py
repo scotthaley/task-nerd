@@ -4,9 +4,10 @@ from enum import Enum, auto
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import Input, ListItem, ListView, Static
+from textual.reactive import reactive
+from textual.widgets import Input, Static
 from textual.widgets._input import Selection
 
 from task_nerd.models import Task, TaskStatus
@@ -75,34 +76,52 @@ class InputCancelled(Message):
     pass
 
 
-class CategoryHeader(ListItem):
+class CategoryRow(Static):
     """A non-selectable header row for a category group."""
 
+    DEFAULT_CSS = """
+    CategoryRow {
+        height: auto;
+        padding: 1 1 0 1;
+    }
+
+    CategoryRow Static {
+        text-style: bold;
+    }
+    """
+
     def __init__(self, category_name: str) -> None:
-        self._category_name = category_name
-        super().__init__()
-        self.disabled = True
-
-    def compose(self) -> ComposeResult:
-        yield Static(f"# {self._category_name}")
+        super().__init__(f"# {category_name}")
+        self.add_class("category-header")
 
 
-class TaskListItem(ListItem):
-    """A single task row display as a ListItem."""
+class TaskRow(Static):
+    """A single task row display."""
+
+    DEFAULT_CSS = """
+    TaskRow {
+        height: auto;
+        padding: 0 1;
+    }
+
+    TaskRow.-completed {
+        text-style: strike;
+        color: $text-muted;
+    }
+    """
 
     def __init__(self, task: Task, indented: bool = False) -> None:
-        self._task_data = task
+        self.task_id = task.id
+        self.task_data = task
         self._indented = indented
-        super().__init__()
+        status_indicator = self._get_status_indicator(task.status)
+        prefix = "  " if indented else ""
+        super().__init__(f"{prefix}{status_indicator} {task.title}")
+
         if task.status == TaskStatus.COMPLETED:
             self.add_class("-completed")
         if indented:
             self.add_class("-indented")
-
-    def compose(self) -> ComposeResult:
-        status_indicator = self._get_status_indicator(self._task_data.status)
-        prefix = "  " if self._indented else ""
-        yield Static(f"{prefix}{status_indicator} {self._task_data.title}")
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
         indicators = {
@@ -114,7 +133,7 @@ class TaskListItem(ListItem):
         return indicators.get(status, "[ ]")
 
 
-class NewTaskRow(ListItem):
+class NewTaskInputRow(Horizontal):
     """An inline input row for creating a new task."""
 
     BINDINGS = [
@@ -122,27 +141,23 @@ class NewTaskRow(ListItem):
     ]
 
     DEFAULT_CSS = """
-    NewTaskRow {
+    NewTaskInputRow {
         height: 1;
         padding: 0 1;
-    }
-
-    NewTaskRow Horizontal {
-        height: 1;
         width: 100%;
     }
 
-    NewTaskRow .status-prefix {
+    NewTaskInputRow .status-prefix {
         width: 4;
         height: 1;
     }
 
-    NewTaskRow .indent-prefix {
+    NewTaskInputRow .indent-prefix {
         width: 2;
         height: 1;
     }
 
-    NewTaskRow Input {
+    NewTaskInputRow Input {
         border: none;
         background: transparent;
         padding: 0;
@@ -150,7 +165,7 @@ class NewTaskRow(ListItem):
         width: 1fr;
     }
 
-    NewTaskRow Input:focus {
+    NewTaskInputRow Input:focus {
         border: none;
     }
     """
@@ -167,14 +182,12 @@ class NewTaskRow(ListItem):
         self._indented = indented
 
     def compose(self) -> ComposeResult:
-        with Horizontal():
-            if self._indented:
-                yield Static("  ", classes="indent-prefix")
-            yield Static("[ ] ", classes="status-prefix")
-            yield Input(id="new-task-input")
+        if self._indented:
+            yield Static("  ", classes="indent-prefix")
+        yield Static("[ ] ", classes="status-prefix")
+        yield Input(id="new-task-input")
 
     def on_mount(self) -> None:
-        # Use call_later to ensure the widget tree is fully ready before focusing
         self.call_later(self._focus_input)
 
     def _focus_input(self) -> None:
@@ -185,7 +198,7 @@ class NewTaskRow(ListItem):
         self.post_message(InputCancelled())
 
 
-class EditTaskRow(ListItem):
+class EditTaskInputRow(Horizontal):
     """An inline input row for editing an existing task."""
 
     BINDINGS = [
@@ -193,27 +206,23 @@ class EditTaskRow(ListItem):
     ]
 
     DEFAULT_CSS = """
-    EditTaskRow {
+    EditTaskInputRow {
         height: 1;
         padding: 0 1;
-    }
-
-    EditTaskRow Horizontal {
-        height: 1;
         width: 100%;
     }
 
-    EditTaskRow .status-prefix {
+    EditTaskInputRow .status-prefix {
         width: 4;
         height: 1;
     }
 
-    EditTaskRow .indent-prefix {
+    EditTaskInputRow .indent-prefix {
         width: 2;
         height: 1;
     }
 
-    EditTaskRow Input {
+    EditTaskInputRow Input {
         border: none;
         background: transparent;
         padding: 0;
@@ -221,31 +230,33 @@ class EditTaskRow(ListItem):
         width: 1fr;
     }
 
-    EditTaskRow Input:focus {
+    EditTaskInputRow Input:focus {
         border: none;
     }
     """
 
     def __init__(self, task: Task, edit_mode: EditMode, indented: bool = False) -> None:
         super().__init__()
-        self._task_data = task
+        self.task_data = task
         self._edit_mode = edit_mode
         self._indented = indented
 
     @property
     def task_id(self) -> int:
         """Return the ID of the task being edited."""
-        return self._task_data.id
+        return self.task_data.id
 
     def compose(self) -> ComposeResult:
-        # Determine initial value based on edit mode
-        initial_value = "" if self._edit_mode == EditMode.SUBSTITUTE else self._task_data.title
+        initial_value = (
+            "" if self._edit_mode == EditMode.SUBSTITUTE else self.task_data.title
+        )
 
-        with Horizontal():
-            if self._indented:
-                yield Static("  ", classes="indent-prefix")
-            yield Static(self._get_status_indicator(self._task_data.status), classes="status-prefix")
-            yield Input(value=initial_value, id="edit-task-input", select_on_focus=False)
+        if self._indented:
+            yield Static("  ", classes="indent-prefix")
+        yield Static(
+            self._get_status_indicator(self.task_data.status), classes="status-prefix"
+        )
+        yield Input(value=initial_value, id="edit-task-input", select_on_focus=False)
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
         indicators = {
@@ -262,14 +273,11 @@ class EditTaskRow(ListItem):
     def _focus_input(self) -> None:
         input_widget = self.query_one(Input)
         input_widget.focus()
-        # Set cursor position based on edit mode
         if self._edit_mode == EditMode.INSERT:
             cursor_pos = 0
         else:
-            # APPEND or SUBSTITUTE - cursor at end
             cursor_pos = len(input_widget.value)
         input_widget.cursor_position = cursor_pos
-        # Clear any text selection so typing appends instead of replacing
         input_widget.selection = Selection.cursor(cursor_pos)
 
     def action_cancel(self) -> None:
@@ -277,8 +285,8 @@ class EditTaskRow(ListItem):
         self.post_message(InputCancelled())
 
 
-class TaskList(ListView):
-    """ListView for displaying tasks with j/k navigation."""
+class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
+    """Custom task list widget with task ID-based selection."""
 
     BINDINGS = [
         Binding("j", "cursor_down", "Down", show=False),
@@ -291,133 +299,124 @@ class TaskList(ListView):
         Binding("escape", "cancel_delete", "Cancel", show=False),
     ]
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._delete_pending: bool = False
-        self._pending_select_task_id: int | None = None
-        self._pending_select_index: int | None = None
-
     DEFAULT_CSS = """
-    TaskList {
+    SimpleTaskList {
         height: 1fr;
     }
 
-    TaskList:focus > TaskListItem.-highlight {
+    SimpleTaskList:focus TaskRow.-selected {
         background: $accent;
+        color: $text;
     }
 
-    TaskList > TaskListItem.-highlight {
+    SimpleTaskList TaskRow.-selected {
         background: $surface;
-    }
-
-    TaskList > TaskListItem {
-        height: auto;
-        padding: 0 1;
-    }
-
-    TaskList > TaskListItem.-completed Static {
-        text-style: strike;
-        color: $text-muted;
-    }
-
-    TaskList > CategoryHeader {
-        height: auto;
-        padding: 1 1 0 1;
-    }
-
-    TaskList > CategoryHeader Static {
-        text-style: bold;
-    }
-
-    TaskList > NewTaskRow {
-        height: 1;
-        padding: 0 1;
+        color: $text;
     }
     """
 
-    def _fix_invalid_index(self) -> None:
-        """Ensure index is valid, resetting if necessary."""
-        if self.index is not None and self.index >= len(self._nodes):
-            # Index is out of bounds - try pending index first, then task ID, then fallback
+    selected_task_id: reactive[int | None] = reactive(None)
 
-            # Try pending index if valid
-            if self._pending_select_index is not None and self._pending_select_index < len(self._nodes):
-                self.index = self._pending_select_index
-                self._pending_select_index = None
-                self._pending_select_task_id = None
-                return
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._task_ids: list[int] = []
+        self._delete_pending: bool = False
 
-            # Try to find pending task by ID
-            if self._pending_select_task_id is not None:
-                for i, child in enumerate(self.children):
-                    if isinstance(child, TaskListItem) and child._task_data.id == self._pending_select_task_id:
-                        self.index = i
-                        self._pending_select_task_id = None
-                        self._pending_select_index = None
-                        return
+    def watch_selected_task_id(self, old_id: int | None, new_id: int | None) -> None:
+        """Update CSS classes when selection changes."""
+        if old_id is not None:
+            try:
+                old_row = self.query_one(f"TaskRow#task-{old_id}", TaskRow)
+                old_row.remove_class("-selected")
+            except Exception:
+                pass
 
-            # Clear pending values
-            self._pending_select_task_id = None
-            self._pending_select_index = None
+        if new_id is not None:
+            try:
+                new_row = self.query_one(f"TaskRow#task-{new_id}", TaskRow)
+                new_row.add_class("-selected")
+                new_row.scroll_visible()
+            except Exception:
+                pass
 
-            # Fallback: select first valid item
-            if self._nodes:
-                for i, child in enumerate(self.children):
-                    if isinstance(child, TaskListItem):
-                        self.index = i
-                        return
-                self.index = 0
-            else:
-                self.index = None
+    def get_selected_task(self) -> Task | None:
+        """Return the currently selected task, or None if no task is selected."""
+        if self.selected_task_id is None:
+            return None
+        try:
+            row = self.query_one(f"TaskRow#task-{self.selected_task_id}", TaskRow)
+            return row.task_data
+        except Exception:
+            return None
 
-    def action_cursor_up(self) -> None:
-        """Move cursor up, with index validation."""
-        self._fix_invalid_index()
-        super().action_cursor_up()
+    def get_selected_task_row(self) -> TaskRow | None:
+        """Return the currently selected TaskRow, or None if none selected."""
+        if self.selected_task_id is None:
+            return None
+        try:
+            return self.query_one(f"TaskRow#task-{self.selected_task_id}", TaskRow)
+        except Exception:
+            return None
 
     def action_cursor_down(self) -> None:
-        """Move cursor down, with index validation."""
-        self._fix_invalid_index()
-        super().action_cursor_down()
+        """Move selection to next task."""
+        if not self._task_ids:
+            return
+        if self.selected_task_id is None:
+            self.selected_task_id = self._task_ids[0]
+        else:
+            try:
+                idx = self._task_ids.index(self.selected_task_id)
+                if idx < len(self._task_ids) - 1:
+                    self.selected_task_id = self._task_ids[idx + 1]
+            except ValueError:
+                self.selected_task_id = self._task_ids[0] if self._task_ids else None
+
+    def action_cursor_up(self) -> None:
+        """Move selection to previous task."""
+        if not self._task_ids:
+            return
+        if self.selected_task_id is None:
+            self.selected_task_id = self._task_ids[-1]
+        else:
+            try:
+                idx = self._task_ids.index(self.selected_task_id)
+                if idx > 0:
+                    self.selected_task_id = self._task_ids[idx - 1]
+            except ValueError:
+                self.selected_task_id = self._task_ids[-1] if self._task_ids else None
 
     def action_toggle_status(self) -> None:
-        """Toggle the highlighted task between done and not done."""
-        if self.highlighted_child and isinstance(self.highlighted_child, TaskListItem):
-            task = self.highlighted_child._task_data
-            new_status = TaskStatus.PENDING if task.status == TaskStatus.COMPLETED else TaskStatus.COMPLETED
+        """Toggle the selected task between done and not done."""
+        task = self.get_selected_task()
+        if task is not None:
+            new_status = (
+                TaskStatus.PENDING
+                if task.status == TaskStatus.COMPLETED
+                else TaskStatus.COMPLETED
+            )
             self.post_message(TaskStatusToggled(task.id, new_status))
 
     def action_delete_press(self) -> None:
         """Handle 'd' key press for vim-style delete."""
-        if not self.highlighted_child or not isinstance(self.highlighted_child, TaskListItem):
+        if self.selected_task_id is None:
             return
 
         if not self._delete_pending:
             self._delete_pending = True
-            self.post_message(StatusBarUpdate("Press d again to delete, Escape to cancel"))
+            self.post_message(
+                StatusBarUpdate("Press d again to delete, Escape to cancel")
+            )
         else:
-            task = self.highlighted_child._task_data
             self._delete_pending = False
             self.post_message(StatusBarUpdate(""))
-            self.post_message(TaskDeleted(task.id))
+            self.post_message(TaskDeleted(self.selected_task_id))
 
     def action_cancel_delete(self) -> None:
         """Cancel pending delete operation."""
         if self._delete_pending:
             self._delete_pending = False
             self.post_message(StatusBarUpdate(""))
-
-    def get_selected_task(self) -> Task | None:
-        """Return the currently highlighted task, or None if no task is selected."""
-        if self.highlighted_child and isinstance(self.highlighted_child, TaskListItem):
-            return self.highlighted_child._task_data
-        return None
-
-    def get_highlighted_task_item(self) -> TaskListItem | None:
-        """Return the currently highlighted TaskListItem, or None if not a task."""
-        if self.highlighted_child and isinstance(self.highlighted_child, TaskListItem):
-            return self.highlighted_child
-        return None
 
     def action_edit_append(self) -> None:
         """Edit task with cursor at end (append mode)."""
@@ -432,14 +431,13 @@ class TaskList(ListView):
         self._start_edit(EditMode.SUBSTITUTE)
 
     def _start_edit(self, mode: EditMode) -> None:
-        """Start editing the highlighted task."""
-        task_item = self.get_highlighted_task_item()
-        if task_item is None:
+        """Start editing the selected task."""
+        task_row = self.get_selected_task_row()
+        if task_row is None:
             return
-        # Delegate to parent TaskListView
         task_list_view = self.parent
         if isinstance(task_list_view, TaskListView):
-            task_list_view.start_edit(task_item, mode)
+            task_list_view.start_edit(task_row, mode)
 
 
 class TaskListView(Vertical):
@@ -466,85 +464,80 @@ class TaskListView(Vertical):
         super().__init__()
         self._tasks: list[Task] = []
         self._editing = False
-        self._editing_task_item: TaskListItem | None = None
-        self._selected_task_id: int | None = None
-        self._selected_index: int | None = None
+        self._editing_task_row: TaskRow | None = None
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="input-container")
-        yield TaskList(id="task-list")
+        yield SimpleTaskList(id="task-list")
 
-    def load_tasks(self, tasks: list[Task]) -> None:
-        """Load tasks into the list view."""
+    def load_tasks(self, tasks: list[Task], select_task_id: int | None = None) -> None:
+        """Load tasks into the list view.
+
+        Args:
+            tasks: List of tasks to display.
+            select_task_id: If provided, select this task after loading.
+        """
         self._tasks = tasks
-        self._refresh_list()
+        self._refresh_list(select_task_id=select_task_id)
 
-    def _refresh_list(self, select_task_id: int | None = None, select_index: int | None = None) -> None:
+    def _refresh_list(self, select_task_id: int | None = None) -> None:
         """Refresh the task list with current tasks.
 
         Args:
             select_task_id: If provided, select this task after rebuilding the list.
-            select_index: If provided, try this index first before searching by task ID.
         """
-        task_list = self.query_one("#task-list", TaskList)
-        task_list.clear()
+        task_list = self.query_one("#task-list", SimpleTaskList)
 
-        if not self._tasks and not self._editing:
-            # Show empty message - mount it outside the list
-            try:
-                self.query_one("#empty-message")
-            except Exception:
-                self.mount(Static("No tasks yet. Press 'a' to add one.", id="empty-message"))
-        else:
-            # Remove empty message if present
-            try:
-                empty_msg = self.query_one("#empty-message")
-                empty_msg.remove()
-            except Exception:
-                pass
+        # Temporarily set to None to avoid triggering watch on old ID
+        task_list._reactive_selected_task_id = None
 
-            current_category: str | None = None
-            for task in self._tasks:
-                # Insert category header when category changes
-                if task.category != current_category:
-                    current_category = task.category
-                    if current_category is not None:
-                        task_list.append(CategoryHeader(current_category))
+        # Remove all children - await will complete the removal before continuing
+        task_list.remove_children()
 
-                # Tasks with a category are indented
-                indented = task.category is not None
-                task_list.append(TaskListItem(task, indented=indented))
+        def do_mount() -> None:
+            tl = self.query_one("#task-list", SimpleTaskList)
+            tl._task_ids = []
 
-        # Store pending values for _fix_invalid_index fallback
-        task_list._pending_select_task_id = select_task_id
-        task_list._pending_select_index = select_index
+            if not self._tasks and not self._editing:
+                try:
+                    self.query_one("#empty-message")
+                except Exception:
+                    self.mount(
+                        Static(
+                            "No tasks yet. Press 'a' to add one.", id="empty-message"
+                        )
+                    )
+            else:
+                try:
+                    empty_msg = self.query_one("#empty-message")
+                    empty_msg.remove()
+                except Exception:
+                    pass
 
-        # Try to set the index now - prefer index if valid, otherwise search by ID
-        index_set = False
-        if select_index is not None and select_index < len(task_list.children):
-            task_list.index = select_index
-            index_set = True
-        elif select_task_id is not None:
-            for i, child in enumerate(task_list.children):
-                if isinstance(child, TaskListItem) and child._task_data.id == select_task_id:
-                    task_list.index = i
-                    index_set = True
-                    break
+                current_category: str | None = None
+                for task in self._tasks:
+                    if task.category != current_category:
+                        current_category = task.category
+                        if current_category is not None:
+                            tl.mount(CategoryRow(current_category))
 
-        # Schedule a callback as backup
-        def do_select() -> None:
-            tl = self.query_one("#task-list", TaskList)
-            # Try pending index first
-            if tl._pending_select_index is not None and tl._pending_select_index < len(tl.children):
-                tl.index = tl._pending_select_index
-            elif tl._pending_select_task_id is not None:
-                for i, child in enumerate(tl.children):
-                    if isinstance(child, TaskListItem) and child._task_data.id == tl._pending_select_task_id:
-                        tl.index = i
-                        break
+                    indented = task.category is not None
+                    row = TaskRow(task, indented=indented)
+                    row.id = f"task-{task.id}"
+                    tl.mount(row)
+                    tl._task_ids.append(task.id)
+
+            # Set selection
+            if select_task_id is not None and select_task_id in tl._task_ids:
+                tl.selected_task_id = select_task_id
+            elif tl._task_ids:
+                tl.selected_task_id = tl._task_ids[0]
+            else:
+                tl.selected_task_id = None
+
             tl.focus()
 
-        self.call_after_refresh(do_select)
+        self.call_after_refresh(do_mount)
 
     def show_input(self) -> None:
         """Show an inline input row after the selected task."""
@@ -552,21 +545,15 @@ class TaskListView(Vertical):
             return
         self._editing = True
 
-        # Remove empty message if present
         try:
             empty_msg = self.query_one("#empty-message")
             empty_msg.remove()
         except Exception:
             pass
 
-        task_list = self.query_one("#task-list", TaskList)
+        task_list = self.query_one("#task-list", SimpleTaskList)
         selected_task = task_list.get_selected_task()
 
-        # Remember selected task and index for restore after cancel
-        self._selected_task_id = selected_task.id if selected_task else None
-        self._selected_index = task_list.index
-
-        # Determine category and position context
         default_category: str | None = None
         after_task_id: int | None = None
         indented = False
@@ -576,17 +563,16 @@ class TaskListView(Vertical):
             after_task_id = selected_task.id
             indented = selected_task.category is not None
 
-        new_row = NewTaskRow(
+        new_row = NewTaskInputRow(
             default_category=default_category,
             after_task_id=after_task_id,
             indented=indented,
         )
 
-        # Mount the input row
-        if task_list.highlighted_child is not None:
-            task_list.mount(new_row, after=task_list.highlighted_child)
+        selected_row = task_list.get_selected_task_row()
+        if selected_row is not None:
+            task_list.mount(new_row, after=selected_row)
         else:
-            # No selection - append at end of list or use input container if empty
             if task_list.children:
                 task_list.mount(new_row)
             else:
@@ -598,77 +584,62 @@ class TaskListView(Vertical):
         if not self._editing:
             return
         self._editing = False
-        task_id_to_restore = self._selected_task_id
-        index_to_restore = self._selected_index
-        self._selected_task_id = None
-        self._selected_index = None
+
+        task_list = self.query_one("#task-list", SimpleTaskList)
+        task_id_to_restore = task_list.selected_task_id
+
         try:
-            # Query from entire TaskListView since NewTaskRow could be in TaskList or input-container
-            new_task_row = self.query_one(NewTaskRow)
+            new_task_row = self.query_one(NewTaskInputRow)
             new_task_row.remove()
         except Exception:
             pass
-        # _refresh_list will schedule the selection and focus via call_after_refresh
-        self._refresh_list(select_task_id=task_id_to_restore, select_index=index_to_restore)
 
-    def start_edit(self, task_item: TaskListItem, mode: EditMode) -> None:
-        """Replace the task item with an edit row."""
+        self._refresh_list(select_task_id=task_id_to_restore)
+
+    def start_edit(self, task_row: TaskRow, mode: EditMode) -> None:
+        """Replace the task row with an edit row."""
         if self._editing:
             return
         self._editing = True
-        self._editing_task_item = task_item
+        self._editing_task_row = task_row
 
-        task = task_item._task_data
-        # Remember selected task for restore after cancel
-        self._selected_task_id = task.id
+        task = task_row.task_data
         indented = task.category is not None
-        edit_row = EditTaskRow(task, mode, indented=indented)
+        edit_row = EditTaskInputRow(task, mode, indented=indented)
 
-        task_list = self.query_one("#task-list", TaskList)
-        # Get current index before modifying the list
-        current_index = task_list.index
-        self._selected_index = current_index
-        task_list.mount(edit_row, after=task_item)
-        task_item.remove()
-        # Restore index to point to the edit row (which is now at the same position)
-        if current_index is not None:
-            task_list.index = current_index
+        task_list = self.query_one("#task-list", SimpleTaskList)
+        task_list.mount(edit_row, after=task_row)
+        task_row.remove()
 
     def hide_edit(self) -> None:
         """Remove the edit row and restore the task list."""
         if not self._editing:
             return
         self._editing = False
-        self._editing_task_item = None
-        task_id_to_restore = self._selected_task_id
-        index_to_restore = self._selected_index
-        self._selected_task_id = None
-        self._selected_index = None
-        # Note: don't need to remove edit_row explicitly - _refresh_list calls clear()
-        # _refresh_list will schedule the selection via call_after_refresh
-        self._refresh_list(select_task_id=task_id_to_restore, select_index=index_to_restore)
-        # Focus is set by call_after_refresh callback after index is set
+        self._editing_task_row = None
+
+        task_list = self.query_one("#task-list", SimpleTaskList)
+        task_id_to_restore = task_list.selected_task_id
+
+        self._refresh_list(select_task_id=task_id_to_restore)
 
     def focus_list(self) -> None:
         """Focus the task list for keyboard navigation."""
-        self.query_one("#task-list", TaskList).focus()
+        self.query_one("#task-list", SimpleTaskList).focus()
 
     def select_task_by_id(self, task_id: int | None) -> None:
         """Select a task by its ID."""
         if task_id is None:
             return
-        task_list = self.query_one("#task-list", TaskList)
-        for i, child in enumerate(task_list.children):
-            if isinstance(child, TaskListItem) and child._task_data.id == task_id:
-                task_list.index = i
-                break
+        task_list = self.query_one("#task-list", SimpleTaskList)
+        if task_id in task_list._task_ids:
+            task_list.selected_task_id = task_id
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle input submission."""
         if event.input.id == "new-task-input" and event.value.strip():
-            # Get context from the NewTaskRow
             try:
-                new_task_row = self.query_one(NewTaskRow)
+                new_task_row = self.query_one(NewTaskInputRow)
                 default_category = new_task_row.default_category
                 after_task_id = new_task_row.after_task_id
             except Exception:
@@ -683,33 +654,28 @@ class TaskListView(Vertical):
                 )
             )
             self._editing = False
-            # Remove the input row
             try:
-                new_task_row = self.query_one(NewTaskRow)
+                new_task_row = self.query_one(NewTaskInputRow)
                 new_task_row.remove()
             except Exception:
                 pass
         elif event.input.id == "edit-task-input" and event.value.strip():
-            # Get task ID from the EditTaskRow
             try:
-                edit_row = self.query_one(EditTaskRow)
+                edit_row = self.query_one(EditTaskInputRow)
                 task_id = edit_row.task_id
             except Exception:
                 return
 
             self.post_message(TaskEdited(task_id, event.value.strip()))
             self._editing = False
-            self._editing_task_item = None
-            # Remove the edit row
+            self._editing_task_row = None
             try:
-                edit_row = self.query_one(EditTaskRow)
+                edit_row = self.query_one(EditTaskInputRow)
                 edit_row.remove()
             except Exception:
                 pass
 
     def on_input_cancelled(self, event: InputCancelled) -> None:
         """Handle input cancellation via Escape."""
-        # hide_edit/hide_input handle selection restoration themselves
-        # They may already have been called by app-level handler, in which case they're no-ops
         self.hide_edit()
         self.hide_input()
