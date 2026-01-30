@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+
+# Virtual environment
+.venv/
+
+# Database
+tasks.db
+
+# IDE
+.idea/
+.vscode/

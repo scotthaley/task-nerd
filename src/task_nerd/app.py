@@ -320,6 +320,8 @@ class TaskNerdApp(App):
                 title, category, event.after_task_id
             )
             self._load_tasks(select_task_id=new_task.id)
+            # Show a new input row for continuous task creation (after refresh completes)
+            self.call_after_refresh(task_list_view.show_input)
 
     def on_task_status_toggled(self, event: TaskStatusToggled) -> None:
         """Handle task status toggle from the task list widget."""
