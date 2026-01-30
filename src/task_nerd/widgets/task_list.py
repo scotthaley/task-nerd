@@ -294,6 +294,8 @@ class TaskList(ListView):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._delete_pending: bool = False
+        self._pending_select_task_id: int | None = None
+        self._pending_select_index: int | None = None
 
     DEFAULT_CSS = """
     TaskList {
@@ -332,6 +334,51 @@ class TaskList(ListView):
         padding: 0 1;
     }
     """
+
+    def _fix_invalid_index(self) -> None:
+        """Ensure index is valid, resetting if necessary."""
+        if self.index is not None and self.index >= len(self._nodes):
+            # Index is out of bounds - try pending index first, then task ID, then fallback
+
+            # Try pending index if valid
+            if self._pending_select_index is not None and self._pending_select_index < len(self._nodes):
+                self.index = self._pending_select_index
+                self._pending_select_index = None
+                self._pending_select_task_id = None
+                return
+
+            # Try to find pending task by ID
+            if self._pending_select_task_id is not None:
+                for i, child in enumerate(self.children):
+                    if isinstance(child, TaskListItem) and child._task_data.id == self._pending_select_task_id:
+                        self.index = i
+                        self._pending_select_task_id = None
+                        self._pending_select_index = None
+                        return
+
+            # Clear pending values
+            self._pending_select_task_id = None
+            self._pending_select_index = None
+
+            # Fallback: select first valid item
+            if self._nodes:
+                for i, child in enumerate(self.children):
+                    if isinstance(child, TaskListItem):
+                        self.index = i
+                        return
+                self.index = 0
+            else:
+                self.index = None
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up, with index validation."""
+        self._fix_invalid_index()
+        super().action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down, with index validation."""
+        self._fix_invalid_index()
+        super().action_cursor_down()
 
     def action_toggle_status(self) -> None:
         """Toggle the highlighted task between done and not done."""
@@ -421,6 +468,7 @@ class TaskListView(Vertical):
         self._editing = False
         self._editing_task_item: TaskListItem | None = None
         self._selected_task_id: int | None = None
+        self._selected_index: int | None = None
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="input-container")
@@ -431,8 +479,13 @@ class TaskListView(Vertical):
         self._tasks = tasks
         self._refresh_list()
 
-    def _refresh_list(self) -> None:
-        """Refresh the task list with current tasks."""
+    def _refresh_list(self, select_task_id: int | None = None, select_index: int | None = None) -> None:
+        """Refresh the task list with current tasks.
+
+        Args:
+            select_task_id: If provided, select this task after rebuilding the list.
+            select_index: If provided, try this index first before searching by task ID.
+        """
         task_list = self.query_one("#task-list", TaskList)
         task_list.clear()
 
@@ -462,6 +515,37 @@ class TaskListView(Vertical):
                 indented = task.category is not None
                 task_list.append(TaskListItem(task, indented=indented))
 
+        # Store pending values for _fix_invalid_index fallback
+        task_list._pending_select_task_id = select_task_id
+        task_list._pending_select_index = select_index
+
+        # Try to set the index now - prefer index if valid, otherwise search by ID
+        index_set = False
+        if select_index is not None and select_index < len(task_list.children):
+            task_list.index = select_index
+            index_set = True
+        elif select_task_id is not None:
+            for i, child in enumerate(task_list.children):
+                if isinstance(child, TaskListItem) and child._task_data.id == select_task_id:
+                    task_list.index = i
+                    index_set = True
+                    break
+
+        # Schedule a callback as backup
+        def do_select() -> None:
+            tl = self.query_one("#task-list", TaskList)
+            # Try pending index first
+            if tl._pending_select_index is not None and tl._pending_select_index < len(tl.children):
+                tl.index = tl._pending_select_index
+            elif tl._pending_select_task_id is not None:
+                for i, child in enumerate(tl.children):
+                    if isinstance(child, TaskListItem) and child._task_data.id == tl._pending_select_task_id:
+                        tl.index = i
+                        break
+            tl.focus()
+
+        self.call_after_refresh(do_select)
+
     def show_input(self) -> None:
         """Show an inline input row after the selected task."""
         if self._editing:
@@ -478,8 +562,9 @@ class TaskListView(Vertical):
         task_list = self.query_one("#task-list", TaskList)
         selected_task = task_list.get_selected_task()
 
-        # Remember selected task for restore after cancel
+        # Remember selected task and index for restore after cancel
         self._selected_task_id = selected_task.id if selected_task else None
+        self._selected_index = task_list.index
 
         # Determine category and position context
         default_category: str | None = None
@@ -513,13 +598,18 @@ class TaskListView(Vertical):
         if not self._editing:
             return
         self._editing = False
+        task_id_to_restore = self._selected_task_id
+        index_to_restore = self._selected_index
+        self._selected_task_id = None
+        self._selected_index = None
         try:
             # Query from entire TaskListView since NewTaskRow could be in TaskList or input-container
             new_task_row = self.query_one(NewTaskRow)
             new_task_row.remove()
         except Exception:
             pass
-        self._refresh_list()
+        # _refresh_list will schedule the selection and focus via call_after_refresh
+        self._refresh_list(select_task_id=task_id_to_restore, select_index=index_to_restore)
 
     def start_edit(self, task_item: TaskListItem, mode: EditMode) -> None:
         """Replace the task item with an edit row."""
@@ -535,8 +625,14 @@ class TaskListView(Vertical):
         edit_row = EditTaskRow(task, mode, indented=indented)
 
         task_list = self.query_one("#task-list", TaskList)
+        # Get current index before modifying the list
+        current_index = task_list.index
+        self._selected_index = current_index
         task_list.mount(edit_row, after=task_item)
         task_item.remove()
+        # Restore index to point to the edit row (which is now at the same position)
+        if current_index is not None:
+            task_list.index = current_index
 
     def hide_edit(self) -> None:
         """Remove the edit row and restore the task list."""
@@ -544,12 +640,14 @@ class TaskListView(Vertical):
             return
         self._editing = False
         self._editing_task_item = None
-        try:
-            edit_row = self.query_one(EditTaskRow)
-            edit_row.remove()
-        except Exception:
-            pass
-        self._refresh_list()
+        task_id_to_restore = self._selected_task_id
+        index_to_restore = self._selected_index
+        self._selected_task_id = None
+        self._selected_index = None
+        # Note: don't need to remove edit_row explicitly - _refresh_list calls clear()
+        # _refresh_list will schedule the selection via call_after_refresh
+        self._refresh_list(select_task_id=task_id_to_restore, select_index=index_to_restore)
+        # Focus is set by call_after_refresh callback after index is set
 
     def focus_list(self) -> None:
         """Focus the task list for keyboard navigation."""
@@ -611,22 +709,7 @@ class TaskListView(Vertical):
 
     def on_input_cancelled(self, event: InputCancelled) -> None:
         """Handle input cancellation via Escape."""
-        task_id_to_restore = self._selected_task_id
-        self._selected_task_id = None
-
-        # Check if we're editing an existing task or creating a new one
-        try:
-            self.query_one(EditTaskRow)
-            self.hide_edit()
-            self.select_task_by_id(task_id_to_restore)
-            self.focus_list()
-            return
-        except Exception:
-            pass
-        try:
-            self.query_one(NewTaskRow)
-            self.hide_input()
-            self.select_task_by_id(task_id_to_restore)
-            self.focus_list()
-        except Exception:
-            pass
+        # hide_edit/hide_input handle selection restoration themselves
+        # They may already have been called by app-level handler, in which case they're no-ops
+        self.hide_edit()
+        self.hide_input()
