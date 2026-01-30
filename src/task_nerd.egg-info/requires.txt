@@ -1,4 +1,7 @@
 textual>=0.85.0
 
+[:python_version < "3.11"]
+tomli>=2.0.0
+
 [dev]
 textual-dev>=1.7.0

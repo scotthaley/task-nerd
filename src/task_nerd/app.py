@@ -6,8 +6,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual.containers import Vertical
+from textual.theme import Theme
 from textual.widgets import Footer, Header, Input, Static
 
+from task_nerd.config import load_config
 from task_nerd.database import Database
 from task_nerd.models import TaskStatus
 from task_nerd.screens import CreateDatabaseDialog
@@ -57,6 +59,48 @@ class TaskNerdApp(App):
         super().__init__()
         self.db_path = Path.cwd() / "tasks.db"
         self.database: Database | None = None
+        self._config = load_config()
+
+    def _apply_theme(self) -> None:
+        """Apply the configured theme."""
+        if self._config.theme == "custom" and self._config.custom_theme:
+            custom = self._config.custom_theme
+            if custom.is_valid():
+                # Build theme kwargs with only non-None values
+                theme_kwargs: dict = {
+                    "primary": custom.primary,
+                    "dark": custom.dark,
+                }
+                if custom.secondary:
+                    theme_kwargs["secondary"] = custom.secondary
+                if custom.accent:
+                    theme_kwargs["accent"] = custom.accent
+                if custom.foreground:
+                    theme_kwargs["foreground"] = custom.foreground
+                if custom.background:
+                    theme_kwargs["background"] = custom.background
+                if custom.surface:
+                    theme_kwargs["surface"] = custom.surface
+                if custom.panel:
+                    theme_kwargs["panel"] = custom.panel
+                if custom.boost:
+                    theme_kwargs["boost"] = custom.boost
+                if custom.warning:
+                    theme_kwargs["warning"] = custom.warning
+                if custom.error:
+                    theme_kwargs["error"] = custom.error
+                if custom.success:
+                    theme_kwargs["success"] = custom.success
+                if custom.variables:
+                    theme_kwargs["variables"] = custom.variables
+
+                custom_theme = Theme(name=custom.name, **theme_kwargs)
+                self.register_theme(custom_theme)
+                self.theme = custom.name
+                return
+
+        # Fall back to built-in theme
+        self.theme = self._config.theme
 
     CSS = """
     #status-bar {
@@ -91,7 +135,7 @@ class TaskNerdApp(App):
 
     def on_mount(self) -> None:
         """Handle application mount - check for database."""
-        self.theme = "catppuccin-mocha"
+        self._apply_theme()
 
         if not self.db_path.exists():
             self.push_screen(CreateDatabaseDialog(self.db_path), self._on_dialog_result)

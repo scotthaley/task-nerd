@@ -101,6 +101,49 @@ sqlite3 tasks.db "SELECT * FROM tasks"
 sqlite3 tasks.db ".schema"
 ```
 
+## Configuration
+
+Task Nerd supports an optional configuration file at `~/.config/task-nerd/task-nerd.toml` for customizing the theme.
+
+### Changing the Built-in Theme
+
+To use a different built-in Textual theme:
+
+```toml
+theme = "textual-dark"
+```
+
+Available built-in themes include: `catppuccin-mocha` (default), `textual-dark`, `textual-light`, `dracula`, `monokai`, `nord`, `gruvbox`, `solarized-light`, `tokyo-night`.
+
+### Creating a Custom Theme
+
+Set `theme = "custom"` and define your colors in the `[custom_theme]` section:
+
+```toml
+theme = "custom"
+
+[custom_theme]
+name = "my-theme"
+dark = true
+primary = "#88C0D0"       # Required
+secondary = "#81A1C1"     # Optional - all below are optional
+accent = "#B48EAD"
+foreground = "#D8DEE9"
+background = "#2E3440"
+surface = "#3B4252"
+panel = "#434C5E"
+boost = "#4C566A"
+warning = "#EBCB8B"
+error = "#BF616A"
+success = "#A3BE8C"
+
+# Optional CSS variable overrides
+[custom_theme.variables]
+footer-key-foreground = "#88C0D0"
+```
+
+The `primary` color is required for custom themes. If it's missing, the app falls back to the default theme.
+
 ## Development
 
 ```bash
