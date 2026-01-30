@@ -104,7 +104,17 @@ sqlite3 tasks.db ".schema"
 
 ## Configuration
 
-Task Nerd supports an optional configuration file at `~/.config/task-nerd/task-nerd.toml` for customizing the theme.
+Task Nerd supports an optional configuration file at `~/.config/task-nerd/task-nerd.toml` for customization.
+
+### Completed Date Format
+
+Completed tasks show their completion date on the right side. You can customize the date format using Python's [strftime](https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior) syntax:
+
+```toml
+completed_date_format = "%Y-%m-%d"  # ISO format: 2024-01-15
+```
+
+The default format is `%m/%d/%y` (e.g., `01/15/24`).
 
 ### Changing the Built-in Theme
 
