@@ -433,7 +433,8 @@ class TaskNerdApp(App):
         if self.database:
             task_list_view = self.query_one(TaskListView)
             task_list_view.hide_edit()
-            self.database.update_task_title(event.task_id, event.new_title)
+            title, category = parse_task_title(event.new_title)
+            self.database.update_task_title(event.task_id, title, category)
             self._load_tasks(select_task_id=event.task_id)
 
     def on_status_bar_update(self, event: StatusBarUpdate) -> None:

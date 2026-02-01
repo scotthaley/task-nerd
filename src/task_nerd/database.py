@@ -225,14 +225,20 @@ class Database:
                 )
             conn.commit()
 
-    def update_task_title(self, task_id: int, title: str) -> None:
-        """Update the title of a task."""
+    def update_task_title(self, task_id: int, title: str, category: str | None = None) -> None:
+        """Update the title and optionally the category of a task."""
         with self.connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE tasks SET title = ?, updated_at = datetime('now') WHERE id = ?",
-                (title, task_id)
-            )
+            if category is not None:
+                cursor.execute(
+                    "UPDATE tasks SET title = ?, category = ?, updated_at = datetime('now') WHERE id = ?",
+                    (title, category, task_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE tasks SET title = ?, updated_at = datetime('now') WHERE id = ?",
+                    (title, task_id)
+                )
             conn.commit()
 
     def delete_task(self, task_id: int) -> None:
