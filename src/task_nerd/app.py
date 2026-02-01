@@ -208,11 +208,13 @@ class TaskNerdApp(App):
         """
         if self.database:
             tasks = self.database.get_all_tasks()
+            categories = self.database.get_all_categories()
             if self.hide_completed:
                 tasks = [t for t in tasks if t.status != TaskStatus.COMPLETED]
             if self.search_term:
                 tasks = self._filter_tasks_by_search(tasks, self.search_term)
             task_list_view = self.query_one(TaskListView)
+            task_list_view.set_categories(categories)
             is_filtered = bool(self.search_term) or self.hide_completed
             task_list_view.load_tasks(
                 tasks,

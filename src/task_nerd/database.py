@@ -483,3 +483,18 @@ class Database:
                 "UPDATE tasks SET order_value = ? WHERE id = ?",
                 ((idx + 1) * 1000, row["id"]),
             )
+
+    def get_all_categories(self) -> list[str]:
+        """Fetch all unique category names from tasks.
+
+        Returns:
+            List of category names, ordered alphabetically.
+        """
+        with self.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT category FROM tasks
+                WHERE category IS NOT NULL
+                ORDER BY category ASC
+            """)
+            return [row["category"] for row in cursor.fetchall()]

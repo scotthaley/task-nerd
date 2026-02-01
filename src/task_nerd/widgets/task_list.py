@@ -118,6 +118,25 @@ class SearchCancelled(Message):
     pass
 
 
+class ShowCategoryAutocomplete(Message):
+    """Message sent to show/update the category autocomplete dropdown."""
+
+    def __init__(
+        self, prefix: str, anchor_widget: "Input", hash_position: int, is_indented: bool
+    ) -> None:
+        self.prefix = prefix
+        self.anchor_widget = anchor_widget
+        self.hash_position = hash_position
+        self.is_indented = is_indented
+        super().__init__()
+
+
+class HideCategoryAutocomplete(Message):
+    """Message sent to hide the category autocomplete dropdown."""
+
+    pass
+
+
 class SearchInputRow(Horizontal):
     """An inline input row for search/filter."""
 
@@ -170,6 +189,102 @@ class SearchInputRow(Horizontal):
     def action_cancel(self) -> None:
         """Handle Escape key - exit search mode."""
         self.post_message(SearchCancelled())
+
+
+class CategoryAutocomplete(Static):
+    """Dropdown widget for category autocomplete."""
+
+    DEFAULT_CSS = """
+    CategoryAutocomplete {
+        background: $surface;
+        border: solid $primary;
+        max-height: 8;
+        width: auto;
+        min-width: 20;
+        padding: 0 1;
+    }
+
+    CategoryAutocomplete .category-option {
+        height: 1;
+        padding: 0 1;
+    }
+
+    CategoryAutocomplete .category-option.-selected {
+        background: $accent;
+    }
+    """
+
+    def __init__(self, categories: list[str]) -> None:
+        super().__init__()
+        self._all_categories = categories
+        self._filtered_categories: list[str] = categories.copy()
+        self._selected_index = 0
+
+    def filter(self, prefix: str) -> None:
+        """Filter categories by prefix, substring, and fuzzy match (case-insensitive)."""
+        prefix_lower = prefix.lower()
+        self._filtered_categories = [
+            c for c in self._all_categories if self._matches(prefix_lower, c.lower())
+        ]
+        # Reset selection if out of bounds
+        if self._selected_index >= len(self._filtered_categories):
+            self._selected_index = max(0, len(self._filtered_categories) - 1)
+        self._refresh_display()
+
+    def _matches(self, pattern: str, text: str) -> bool:
+        """Check if pattern matches text via prefix, substring, or fuzzy match."""
+        # Prefix match
+        if text.startswith(pattern):
+            return True
+        # Substring match
+        if pattern in text:
+            return True
+        # Fuzzy match: all chars in pattern appear in text in order
+        pattern_idx = 0
+        for char in text:
+            if pattern_idx < len(pattern) and char == pattern[pattern_idx]:
+                pattern_idx += 1
+        return pattern_idx == len(pattern)
+
+    def _refresh_display(self) -> None:
+        """Refresh the display with current filtered categories."""
+        if not self._filtered_categories:
+            self.update("[dim]No matching categories[/dim]")
+            return
+
+        lines = []
+        for i, cat in enumerate(self._filtered_categories):
+            if i == self._selected_index:
+                lines.append(f"[reverse] {cat} [/reverse]")
+            else:
+                lines.append(f" {cat} ")
+        self.update("\n".join(lines))
+
+    def on_mount(self) -> None:
+        """Initialize display on mount."""
+        self._refresh_display()
+
+    def action_cursor_up(self) -> None:
+        """Move selection up."""
+        if self._filtered_categories and self._selected_index > 0:
+            self._selected_index -= 1
+            self._refresh_display()
+
+    def action_cursor_down(self) -> None:
+        """Move selection down."""
+        if self._filtered_categories and self._selected_index < len(self._filtered_categories) - 1:
+            self._selected_index += 1
+            self._refresh_display()
+
+    def get_selected(self) -> str | None:
+        """Get the currently selected category, or None if empty."""
+        if self._filtered_categories and 0 <= self._selected_index < len(self._filtered_categories):
+            return self._filtered_categories[self._selected_index]
+        return None
+
+    def has_matches(self) -> bool:
+        """Return True if there are any matching categories."""
+        return bool(self._filtered_categories)
 
 
 class CategoryRow(Static):
@@ -317,6 +432,8 @@ class NewTaskInputRow(Horizontal):
         self.after_task_id = after_task_id
         self.before_task_id = before_task_id
         self._indented = indented
+        self._autocomplete_active = False
+        self._hash_position: int | None = None
 
     def compose(self) -> ComposeResult:
         if self._indented:
@@ -332,7 +449,101 @@ class NewTaskInputRow(Horizontal):
 
     def action_cancel(self) -> None:
         """Handle Escape key - cancel new task creation."""
-        self.post_message(InputCancelled())
+        if self._autocomplete_active:
+            self._autocomplete_active = False
+            self._hash_position = None
+            self.post_message(HideCategoryAutocomplete())
+        else:
+            self.post_message(InputCancelled())
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changes to detect # for category autocomplete."""
+        if event.input.id != "new-task-input":
+            return
+
+        value = event.value
+        cursor_pos = event.input.cursor_position
+
+        # Find the last # before the cursor position
+        text_before_cursor = value[:cursor_pos]
+        hash_pos = text_before_cursor.rfind("#")
+
+        if hash_pos == -1:
+            # No # found before cursor
+            if self._autocomplete_active:
+                self._autocomplete_active = False
+                self._hash_position = None
+                self.post_message(HideCategoryAutocomplete())
+            return
+
+        # Get the text after the #
+        prefix = text_before_cursor[hash_pos + 1:]
+
+        # If prefix contains a space, the category is complete
+        if " " in prefix:
+            if self._autocomplete_active:
+                self._autocomplete_active = False
+                self._hash_position = None
+                self.post_message(HideCategoryAutocomplete())
+            return
+
+        # Show autocomplete with the prefix
+        self._autocomplete_active = True
+        self._hash_position = hash_pos
+        self.post_message(
+            ShowCategoryAutocomplete(prefix, event.input, hash_pos, self._indented)
+        )
+
+    def on_key(self, event) -> None:
+        """Handle key events for autocomplete navigation."""
+        if not self._autocomplete_active:
+            return
+
+        # Get the autocomplete widget from the parent TaskListView
+        task_list_view = self.ancestors_with_self
+        for ancestor in task_list_view:
+            if isinstance(ancestor, TaskListView):
+                autocomplete = ancestor.get_autocomplete()
+                if autocomplete is None:
+                    return
+
+                if event.key == "up":
+                    event.prevent_default()
+                    event.stop()
+                    autocomplete.action_cursor_up()
+                elif event.key == "down":
+                    event.prevent_default()
+                    event.stop()
+                    autocomplete.action_cursor_down()
+                elif event.key == "tab":
+                    event.prevent_default()
+                    event.stop()
+                    selected = autocomplete.get_selected()
+                    if selected:
+                        self._complete_category(selected)
+                    self._autocomplete_active = False
+                    self._hash_position = None
+                    self.post_message(HideCategoryAutocomplete())
+                return
+
+    def _complete_category(self, category: str) -> None:
+        """Insert the selected category into the input."""
+        if self._hash_position is None:
+            return
+
+        input_widget = self.query_one(Input)
+        value = input_widget.value
+        cursor_pos = input_widget.cursor_position
+
+        # Replace from # to cursor with #category
+        before_hash = value[:self._hash_position]
+        after_cursor = value[cursor_pos:]
+        new_value = f"{before_hash}#{category} {after_cursor}"
+
+        input_widget.value = new_value
+        # Position cursor after the category and space
+        new_cursor_pos = self._hash_position + len(category) + 2
+        input_widget.cursor_position = new_cursor_pos
 
 
 class EditTaskInputRow(Horizontal):
@@ -381,6 +592,8 @@ class EditTaskInputRow(Horizontal):
         self.task_data = task
         self._edit_mode = edit_mode
         self._indented = indented
+        self._autocomplete_active = False
+        self._hash_position: int | None = None
 
     @property
     def task_id(self) -> int:
@@ -424,7 +637,101 @@ class EditTaskInputRow(Horizontal):
 
     def action_cancel(self) -> None:
         """Handle Escape key - cancel edit."""
-        self.post_message(InputCancelled())
+        if self._autocomplete_active:
+            self._autocomplete_active = False
+            self._hash_position = None
+            self.post_message(HideCategoryAutocomplete())
+        else:
+            self.post_message(InputCancelled())
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changes to detect # for category autocomplete."""
+        if event.input.id != "edit-task-input":
+            return
+
+        value = event.value
+        cursor_pos = event.input.cursor_position
+
+        # Find the last # before the cursor position
+        text_before_cursor = value[:cursor_pos]
+        hash_pos = text_before_cursor.rfind("#")
+
+        if hash_pos == -1:
+            # No # found before cursor
+            if self._autocomplete_active:
+                self._autocomplete_active = False
+                self._hash_position = None
+                self.post_message(HideCategoryAutocomplete())
+            return
+
+        # Get the text after the #
+        prefix = text_before_cursor[hash_pos + 1:]
+
+        # If prefix contains a space, the category is complete
+        if " " in prefix:
+            if self._autocomplete_active:
+                self._autocomplete_active = False
+                self._hash_position = None
+                self.post_message(HideCategoryAutocomplete())
+            return
+
+        # Show autocomplete with the prefix
+        self._autocomplete_active = True
+        self._hash_position = hash_pos
+        self.post_message(
+            ShowCategoryAutocomplete(prefix, event.input, hash_pos, self._indented)
+        )
+
+    def on_key(self, event) -> None:
+        """Handle key events for autocomplete navigation."""
+        if not self._autocomplete_active:
+            return
+
+        # Get the autocomplete widget from the parent TaskListView
+        task_list_view = self.ancestors_with_self
+        for ancestor in task_list_view:
+            if isinstance(ancestor, TaskListView):
+                autocomplete = ancestor.get_autocomplete()
+                if autocomplete is None:
+                    return
+
+                if event.key == "up":
+                    event.prevent_default()
+                    event.stop()
+                    autocomplete.action_cursor_up()
+                elif event.key == "down":
+                    event.prevent_default()
+                    event.stop()
+                    autocomplete.action_cursor_down()
+                elif event.key == "tab":
+                    event.prevent_default()
+                    event.stop()
+                    selected = autocomplete.get_selected()
+                    if selected:
+                        self._complete_category(selected)
+                    self._autocomplete_active = False
+                    self._hash_position = None
+                    self.post_message(HideCategoryAutocomplete())
+                return
+
+    def _complete_category(self, category: str) -> None:
+        """Insert the selected category into the input."""
+        if self._hash_position is None:
+            return
+
+        input_widget = self.query_one(Input)
+        value = input_widget.value
+        cursor_pos = input_widget.cursor_position
+
+        # Replace from # to cursor with #category
+        before_hash = value[:self._hash_position]
+        after_cursor = value[cursor_pos:]
+        new_value = f"{before_hash}#{category} {after_cursor}"
+
+        input_widget.value = new_value
+        # Position cursor after the category and space
+        new_cursor_pos = self._hash_position + len(category) + 2
+        input_widget.cursor_position = new_cursor_pos
 
 
 class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
@@ -723,6 +1030,8 @@ class TaskListView(Vertical):
         self._editing_task_row: TaskRow | None = None
         self._is_filtered = False
         self._completed_date_format = completed_date_format
+        self._categories: list[str] = []
+        self._autocomplete: CategoryAutocomplete | None = None
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="input-container")
@@ -1038,5 +1347,64 @@ class TaskListView(Vertical):
 
     def on_input_cancelled(self, event: InputCancelled) -> None:
         """Handle input cancellation via Escape."""
+        self._hide_autocomplete()
         self.hide_edit()
         self.hide_input()
+
+    def set_categories(self, categories: list[str]) -> None:
+        """Set the available categories for autocomplete."""
+        self._categories = categories
+
+    def on_show_category_autocomplete(self, event: ShowCategoryAutocomplete) -> None:
+        """Handle request to show/update the category autocomplete dropdown."""
+        event.stop()
+
+        if not self._categories:
+            # No categories available, don't show autocomplete
+            self._hide_autocomplete()
+            return
+
+        # Calculate horizontal offset:
+        # - 1 (left padding of input row)
+        # - 2 (indent prefix, if present)
+        # - 4 (status prefix "[ ] ")
+        # - hash_position (position of # in the input text)
+        horizontal_offset = 1 + (2 if event.is_indented else 0) + 4 + event.hash_position
+
+        input_row = event.anchor_widget.parent
+
+        if self._autocomplete is None:
+            # Create and mount the autocomplete widget right after the input row
+            self._autocomplete = CategoryAutocomplete(self._categories)
+            # Mount in the task list, right after the input row
+            task_list = self.query_one("#task-list", SimpleTaskList)
+            if input_row is not None:
+                task_list.mount(self._autocomplete, after=input_row)
+            else:
+                task_list.mount(self._autocomplete)
+
+        # Filter the autocomplete based on the prefix
+        self._autocomplete.filter(event.prefix)
+
+        # Hide if no matches
+        if not self._autocomplete.has_matches():
+            self._hide_autocomplete()
+            return
+
+        # Set horizontal position using margin
+        self._autocomplete.styles.margin = (0, 0, 0, horizontal_offset)
+
+    def on_hide_category_autocomplete(self, event: HideCategoryAutocomplete) -> None:
+        """Handle request to hide the category autocomplete dropdown."""
+        event.stop()
+        self._hide_autocomplete()
+
+    def _hide_autocomplete(self) -> None:
+        """Hide and remove the autocomplete widget."""
+        if self._autocomplete is not None:
+            self._autocomplete.remove()
+            self._autocomplete = None
+
+    def get_autocomplete(self) -> CategoryAutocomplete | None:
+        """Get the current autocomplete widget, or None if not shown."""
+        return self._autocomplete
