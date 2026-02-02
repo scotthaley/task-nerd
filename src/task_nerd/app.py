@@ -12,7 +12,7 @@ from textual.widgets import Footer, Input, Static
 from task_nerd.config import load_config
 from task_nerd.database import Database
 from task_nerd.models import TaskStatus
-from task_nerd.screens import CreateDatabaseDialog
+from task_nerd.screens import CreateDatabaseDialog, TaskEditModal
 from task_nerd.utils import parse_task_title
 from task_nerd.widgets import AsciiArtHeader, TaskListView
 from task_nerd.widgets.task_list import (
@@ -25,6 +25,7 @@ from task_nerd.widgets.task_list import (
     TaskCreated,
     TaskDeleted,
     TaskEdited,
+    TaskEditRequested,
     TaskPasted,
     TaskStatusToggled,
 )
@@ -62,6 +63,7 @@ class TaskNerdApp(App):
         self.db_path = Path.cwd() / "tasks.db"
         self.database: Database | None = None
         self._config = load_config()
+        self._editing_task_id: int | None = None
 
     def _apply_theme(self) -> None:
         """Apply the configured theme."""
@@ -130,10 +132,14 @@ class TaskNerdApp(App):
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
         yield AsciiArtHeader()
-        yield TaskListView(completed_date_format=self._config.completed_date_format)
+        yield TaskListView(
+            completed_date_format=self._config.completed_date_format,
+            show_description_preview=self._config.show_description_preview,
+        )
         yield Static("", id="status-bar", classes="hidden")
         yield Vertical(id="search-container", classes="hidden")
         yield Footer()
+
 
     def on_mount(self) -> None:
         """Handle application mount - check for database."""
@@ -436,6 +442,29 @@ class TaskNerdApp(App):
             title, category = parse_task_title(event.new_title)
             self.database.update_task_title(event.task_id, title, category)
             self._load_tasks(select_task_id=event.task_id)
+
+    def on_task_edit_requested(self, event: TaskEditRequested) -> None:
+        """Handle request to open task edit modal."""
+        task_list_view = self.query_one(TaskListView)
+        if task_list_view._editing or self.search_mode:
+            return
+        self._editing_task_id = event.task.id
+        self.push_screen(TaskEditModal(event.task), self._on_task_edit_modal_result)
+
+    def _on_task_edit_modal_result(self, result: tuple[str, str] | None) -> None:
+        """Handle the result from TaskEditModal."""
+        if result is None:
+            # User cancelled
+            self._load_tasks(select_task_id=self._editing_task_id)
+            return
+
+        title, description = result
+        if self.database and self._editing_task_id is not None:
+            parsed_title, category = parse_task_title(title)
+            self.database.update_task(
+                self._editing_task_id, parsed_title, description, category
+            )
+            self._load_tasks(select_task_id=self._editing_task_id)
 
     def on_status_bar_update(self, event: StatusBarUpdate) -> None:
         """Handle status bar updates from widgets."""

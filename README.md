@@ -116,6 +116,16 @@ completed_date_format = "%Y-%m-%d"  # ISO format: 2024-01-15
 
 The default format is `%m/%d/%y` (e.g., `01/15/24`).
 
+### Description Preview
+
+The first 40 characters of a task's description can be shown underneath the task title. Configure with:
+
+```toml
+show_description_preview = "incomplete"  # default: only show for incomplete tasks
+show_description_preview = "all"         # show for all tasks including completed
+show_description_preview = "off"         # disable description preview
+```
+
 ### Changing the Built-in Theme
 
 To use a different built-in Textual theme:

@@ -104,6 +104,14 @@ class EscapePressedInList(Message):
     pass
 
 
+class TaskEditRequested(Message):
+    """Message sent when the user wants to open the edit modal for a task."""
+
+    def __init__(self, task: Task) -> None:
+        self.task = task
+        super().__init__()
+
+
 class SearchSubmitted(Message):
     """Message sent when search is submitted via Enter."""
 
@@ -334,12 +342,13 @@ class TaskRow(Static):
         task: Task,
         indented: bool = False,
         completed_date_format: str = DEFAULT_COMPLETED_DATE_FORMAT,
+        show_description_preview: str = "incomplete",
     ) -> None:
         self.task_id = task.id
         self.task_data = task
         self._indented = indented
 
-        content = self._build_content(task, completed_date_format)
+        content = self._build_content(task, completed_date_format, show_description_preview)
         super().__init__(content)
 
         if task.status == TaskStatus.COMPLETED:
@@ -347,13 +356,33 @@ class TaskRow(Static):
         if indented:
             self.add_class("-indented")
 
-    def _build_content(self, task: Task, date_format: str) -> Table | str:
+    def _build_content(
+        self, task: Task, date_format: str, show_description_preview: str
+    ) -> Table | str:
         """Build the content for this task row."""
         status_indicator = self._get_status_indicator(task.status)
         prefix = "  " if self._indented else ""
         task_text = f"{prefix}{status_indicator} {task.title}"
 
-        if task.status == TaskStatus.COMPLETED:
+        # Determine if we should show description preview
+        # "off" = never, "all" = always, "incomplete" = only for non-completed
+        is_completed = task.status == TaskStatus.COMPLETED
+        should_show_desc = (
+            show_description_preview == "all"
+            or (show_description_preview == "incomplete" and not is_completed)
+        )
+
+        # Build description preview (first 40 chars or until first newline)
+        desc_preview = ""
+        if should_show_desc and task.description:
+            first_line = task.description.split("\n")[0]
+            desc_text = first_line[:40]
+            if len(first_line) > 40:
+                desc_text += "..."
+            desc_indent = prefix + "    "  # 4 spaces for "[ ] "
+            desc_preview = f"\n[dim]{desc_indent}{desc_text}[/dim]"
+
+        if is_completed:
             # Apply strikethrough to task text only
             task_text = f"[strike]{task_text}[/strike]"
 
@@ -363,10 +392,10 @@ class TaskRow(Static):
                 table = Table(box=None, show_header=False, expand=True, padding=(0, 0))
                 table.add_column(ratio=1, overflow="fold")
                 table.add_column(width=len(date_str), justify="right")
-                table.add_row(task_text, date_str)
+                table.add_row(task_text + desc_preview, date_str)
                 return table
 
-        return task_text
+        return task_text + desc_preview
 
     def _get_status_indicator(self, status: TaskStatus) -> str:
         # Backslash escapes brackets to prevent Rich markup interpretation
@@ -741,6 +770,7 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("space", "toggle_status", "Toggle done", show=True),
+        Binding("enter", "open_edit_modal", "Edit", show=False),
         Binding("a", "edit_append", "Edit", show=False),
         Binding("i", "edit_append", "Edit", show=True),
         Binding("I", "edit_insert", "Edit (start)", show=False),
@@ -886,6 +916,13 @@ class SimpleTaskList(VerticalScroll, can_focus=True, can_focus_children=False):
             # Nothing to cancel locally, let the app handle it
             self.post_message(EscapePressedInList())
 
+    def action_open_edit_modal(self) -> None:
+        """Open the edit modal for the selected task."""
+        self._clipboard_ready = True  # User has interacted
+        task = self.get_selected_task()
+        if task is not None:
+            self.post_message(TaskEditRequested(task))
+
     def action_edit_append(self) -> None:
         """Edit task with cursor at end (append mode)."""
         self._clipboard_ready = True  # User has interacted
@@ -1022,7 +1059,9 @@ class TaskListView(Vertical):
     """
 
     def __init__(
-        self, completed_date_format: str = DEFAULT_COMPLETED_DATE_FORMAT
+        self,
+        completed_date_format: str = DEFAULT_COMPLETED_DATE_FORMAT,
+        show_description_preview: str = "incomplete",
     ) -> None:
         super().__init__()
         self._tasks: list[Task] = []
@@ -1030,6 +1069,7 @@ class TaskListView(Vertical):
         self._editing_task_row: TaskRow | None = None
         self._is_filtered = False
         self._completed_date_format = completed_date_format
+        self._show_description_preview = show_description_preview
         self._categories: list[str] = []
         self._autocomplete: CategoryAutocomplete | None = None
 
@@ -1109,6 +1149,7 @@ class TaskListView(Vertical):
                         task,
                         indented=indented,
                         completed_date_format=self._completed_date_format,
+                        show_description_preview=self._show_description_preview,
                     )
                     row.id = f"task-{task.id}"
                     tl.mount(row)
