@@ -544,6 +544,14 @@ def main() -> None:
         print(f"task-nerd {version('task-nerd')}")
         return
 
+    # Check for CLI commands
+    from task_nerd.cli import run_cli
+
+    result = run_cli()
+    if result is not None:
+        sys.exit(result)
+
+    # No CLI command - launch TUI
     app = TaskNerdApp()
     app.run()
 

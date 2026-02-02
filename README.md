@@ -88,6 +88,43 @@ Press `/` to open the search bar. The search supports:
 
 The filter is applied in real-time as you type. Press `Enter` to confirm or `Escape` to close the search bar (filter remains active). Press `Escape` again to clear the filter.
 
+## CLI Commands
+
+Task Nerd provides CLI commands to interact with tasks without launching the TUI:
+
+### List Tasks
+
+```bash
+task-nerd ls          # Table format
+task-nerd ls --json   # JSON format
+```
+
+Example output:
+```
+ID   STATUS     CATEGORY     TITLE
+1    pending    -            Fix login bug
+2    completed  work         Write documentation
+3    pending    personal     Buy groceries
+```
+
+### Edit Tasks
+
+```bash
+task-nerd edit --id 1 --name "New title"
+task-nerd edit --id 1 --description "New description"
+task-nerd edit --id 1 --category "work"
+task-nerd edit --id 1 --name "New title" --category "urgent"
+```
+
+At least one of `--name`, `--description`, or `--category` is required. Unspecified fields remain unchanged.
+
+### Mark Tasks Complete/Incomplete
+
+```bash
+task-nerd mark --id 1 --complete    # Mark as completed
+task-nerd mark --id 1 --incomplete  # Mark as pending
+```
+
 ## Data Storage
 
 Task Nerd stores tasks in a SQLite database file (`tasks.db`) in the directory where you run the command. Each project/directory can have its own task database.
@@ -164,6 +201,44 @@ footer-key-foreground = "#88C0D0"
 ```
 
 The `primary` color is required for custom themes. If it's missing, the app falls back to the default theme.
+
+## Claude Code Integration
+
+If you use [Claude Code](https://claude.ai/code), you can add the following to your project's `CLAUDE.md` file to teach Claude how to interact with your task-nerd database:
+
+````markdown
+## Task Management
+
+This project uses [task-nerd](https://github.com/yourusername/task-nerd) for task management. Tasks are stored in `tasks.db` in the project root. When tasks are mentioned, they refer to this database.
+
+### CLI Commands
+
+```bash
+# List all tasks
+task-nerd ls
+
+# List tasks as JSON (useful for parsing)
+task-nerd ls --json
+
+# Edit a task
+task-nerd edit --id <id> --name "New title"
+task-nerd edit --id <id> --description "New description"
+task-nerd edit --id <id> --category "category-name"
+
+# Mark a task complete or incomplete
+task-nerd mark --id <id> --complete
+task-nerd mark --id <id> --incomplete
+```
+
+### Task Structure
+
+Tasks have the following fields:
+- `id`: Unique integer identifier
+- `title`: The task name/title
+- `description`: Optional longer description
+- `status`: Either "pending" or "completed"
+- `category`: Optional category for grouping
+````
 
 ## Development
 
