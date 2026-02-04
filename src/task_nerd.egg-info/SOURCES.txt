@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 src/task_nerd/__init__.py
 src/task_nerd/app.py
+src/task_nerd/cli.py
 src/task_nerd/config.py
 src/task_nerd/database.py
 src/task_nerd/models.py

@@ -23,6 +23,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", dest="json_output", help="Output as JSON"
     )
 
+    # add command
+    add_parser = subparsers.add_parser("add", help="Add a new task")
+    add_parser.add_argument(
+        "--name", type=str, required=True, help="Title for the new task"
+    )
+    add_parser.add_argument("--description", type=str, help="Task description")
+    add_parser.add_argument("--category", type=str, help="Task category")
+
     # edit command
     edit_parser = subparsers.add_parser("edit", help="Edit a task")
     edit_parser.add_argument(
@@ -68,6 +76,22 @@ def get_task_by_id(db: Database, task_id: int) -> Task | None:
         if task.id == task_id:
             return task
     return None
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Add a new task."""
+    db = get_database()
+    if db is None:
+        return 1
+
+    task = db.create_task(args.name, args.category)
+
+    # If description was provided, update the task with it
+    if args.description:
+        db.update_task(task.id, task.title, args.description, task.category)
+
+    print(f"Created task {task.id}: {task.title}")
+    return 0
 
 
 def cmd_ls(args: argparse.Namespace) -> int:
@@ -171,6 +195,8 @@ def run_cli(argv: list[str] | None = None) -> int | None:
 
     if args.command == "ls":
         return cmd_ls(args)
+    elif args.command == "add":
+        return cmd_add(args)
     elif args.command == "edit":
         return cmd_edit(args)
     elif args.command == "mark":

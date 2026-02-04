@@ -51,21 +51,21 @@ On first run, the app will prompt you to create a `tasks.db` database file in th
 
 ### Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `o` | Add a new task after the selected task |
-| `a` | Edit task (cursor at end) |
-| `i` | Edit task (cursor at end) |
-| `I` | Edit task (cursor at beginning) |
-| `s` | Edit task (replace text) |
-| `space` | Toggle task completion |
-| `dd` | Delete task (press `d` twice) |
-| `j` / `k` | Move down / up |
-| `/` | Search/filter tasks |
-| `F1` | Toggle hide completed tasks |
-| `D` | Toggle dark/light mode |
-| `Escape` | Cancel current action or clear search |
-| `q` | Quit |
+| Key       | Action                                 |
+| --------- | -------------------------------------- |
+| `o`       | Add a new task after the selected task |
+| `a`       | Edit task (cursor at end)              |
+| `i`       | Edit task (cursor at end)              |
+| `I`       | Edit task (cursor at beginning)        |
+| `s`       | Edit task (replace text)               |
+| `space`   | Toggle task completion                 |
+| `dd`      | Delete task (press `d` twice)          |
+| `j` / `k` | Move down / up                         |
+| `/`       | Search/filter tasks                    |
+| `F1`      | Toggle hide completed tasks            |
+| `D`       | Toggle dark/light mode                 |
+| `Escape`  | Cancel current action or clear search  |
+| `q`       | Quit                                   |
 
 ### Categories
 
@@ -100,12 +100,24 @@ task-nerd ls --json   # JSON format
 ```
 
 Example output:
+
 ```
 ID   STATUS     CATEGORY     TITLE
 1    pending    -            Fix login bug
 2    completed  work         Write documentation
 3    pending    personal     Buy groceries
 ```
+
+### Add Tasks
+
+```bash
+task-nerd add --name "Task title"
+task-nerd add --name "Task title" --description "Details here"
+task-nerd add --name "Task title" --category "work"
+task-nerd add --name "Fix bug" --description "Login fails on Safari" --category "urgent"
+```
+
+The `--name` flag is required. `--description` and `--category` are optional.
 
 ### Edit Tasks
 
@@ -211,6 +223,9 @@ If you use [Claude Code](https://claude.ai/code), you can add the following to y
 
 This project uses [task-nerd](https://github.com/yourusername/task-nerd) for task management. Tasks are stored in `tasks.db` in the project root. When tasks are mentioned, they refer to this database.
 
+Whenever making a plan, you should check task-nerd to see if there is a relevant corresponding task.
+If there is not a corresponding task, you should create one.
+
 ### CLI Commands
 
 ```bash
@@ -219,6 +234,10 @@ task-nerd ls
 
 # List tasks as JSON (useful for parsing)
 task-nerd ls --json
+
+# Add a new task
+task-nerd add --name "Task title"
+task-nerd add --name "Task title" --description "Details" --category "work"
 
 # Edit a task
 task-nerd edit --id <id> --name "New title"
@@ -233,6 +252,7 @@ task-nerd mark --id <id> --incomplete
 ### Task Structure
 
 Tasks have the following fields:
+
 - `id`: Unique integer identifier
 - `title`: The task name/title
 - `description`: Optional longer description
